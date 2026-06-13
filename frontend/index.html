@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>AuraFi — Clareza para Investir</title>
+<style>
+  :root {
+    --aura-bg: #0D0B1A;
+    --aura-surface: #161228;
+    --aura-surface2: #1E1935;
+    --aura-border: rgba(255,255,255,0.08);
+    --aura-pink: #EC4899;
+    --aura-pink-light: #F472B6;
+    --aura-purple: #7C3AED;
+    --aura-purple-light: #A855F7;
+    --aura-text: #F1F0FF;
+    --aura-muted: #9090B0;
+    --aura-green: #10B981;
+    --aura-amber: #F59E0B;
+    --aura-red: #EF4444;
+    --tab-h: 72px;
+    --status-h: 44px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  }
+  #phone {
+    width: 390px;
+    height: 844px;
+    background: var(--aura-bg);
+    border-radius: 44px;
+    border: 2px solid #2a2a3a;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 40px 80px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  .status-bar {
+    height: var(--status-h);
+    background: var(--aura-bg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .status-bar .time { font-size: 15px; font-weight: 600; color: var(--aura-text); }
+  .status-bar .icons { display: flex; gap: 6px; align-items: center; }
+  .status-bar .icons span { font-size: 12px; color: var(--aura-text); }
+  .notch {
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 120px; height: 34px;
+    background: #000;
+    border-radius: 0 0 20px 20px;
+  }
+  .screen { flex: 1; overflow: hidden; position: relative; }
+  .view {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--aura-bg);
+    display: none;
+    flex-direction: column;
+  }
+  .view.active { display: flex; }
+  .view::-webkit-scrollbar { display: none; }
+  .tab-bar {
+    height: var(--tab-h);
+    background: var(--aura-surface);
+    border-top: 1px solid var(--aura-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    flex-shrink: 0;
+    padding-bottom: 8px;
+  }
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    padding: 8px 16px;
+    border-radius: 12px;
+    transition: all 0.15s;
+    color: var(--aura-muted);
+  }
+  .tab-item.active { color: var(--aura-pink); }
+  .tab-item .tab-icon { font-size: 22px; }
+  .tab-item .tab-label { font-size: 10px; font-weight: 500; letter-spacing: 0.3px; }
+  .btn-primary {
+    background: var(--aura-pink);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    padding: 16px 24px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn-primary:active { transform: scale(0.98); background: #D1477F; }
+  .btn-secondary {
+    background: transparent;
+    color: var(--aura-muted);
+    border: 1px solid var(--aura-border);
+    border-radius: 14px;
+    padding: 14px 24px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn-secondary:active { transform: scale(0.98); }
+  .chip {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--aura-border);
+    color: var(--aura-muted);
+    background: var(--aura-surface2);
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .chip.selected { background: rgba(236,72,153,0.15); border-color: var(--aura-pink); color: var(--aura-pink); }
+  .card {
+    background: var(--aura-surface);
+    border: 1px solid var(--aura-border);
+    border-radius: 16px;
+    padding: 16px;
+  }
+  .card-highlight {
+    background: var(--aura-surface2);
+    border: 1px solid rgba(236,72,153,0.2);
+    border-radius: 16px;
+    padding: 16px;
+  }
+  .score-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .score-high { background: rgba(16,185,129,0.15); color: #10B981; }
+  .score-mid { background: rgba(245,158,11,0.15); color: #F59E0B; }
+  .apy-text { color: #10B981; font-size: 24px; font-weight: 700; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--aura-muted);
+    margin-bottom: 12px;
+  }
+  .chat-bubble {
+    max-width: 78%;
+    padding: 12px 14px;
+    border-radius: 18px;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 6px;
+  }
+  .bubble-aura {
+    background: var(--aura-surface2);
+    color: var(--aura-text);
+    border-radius: 4px 18px 18px 18px;
+    align-self: flex-start;
+  }
+  .bubble-user {
+    background: var(--aura-pink);
+    color: #fff;
+    border-radius: 18px 4px 18px 18px;
+    align-self: flex-end;
+  }
+  .typing-dot {
+    width: 6px; height: 6px;
+    background: var(--aura-muted);
+    border-radius: 50%;
+    display: inline-block;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-6px); }
+  }
+  .progress-bar-bg {
+    background: var(--aura-border);
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--aura-pink);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+  }
+  .option-card {
+    background: var(--aura-surface);
+    border: 1.5px solid var(--aura-border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .option-card:active { transform: scale(0.99); }
+  .option-card.selected { border-color: var(--aura-pink); background: rgba(236,72,153,0.08); }
+  .radio-circle {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--aura-border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .radio-circle.selected { border-color: var(--aura-pink); background: var(--aura-pink); }
+  .radio-circle.selected::after { content: ''; width: 8px; height: 8px; background: #fff; border-radius: 50%; }
+  .aura-avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--aura-purple), var(--aura-pink));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .divider { height: 1px; background: var(--aura-border); margin: 16px 0; }
+  .tag {
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .tag-purple { background: rgba(124,58,237,0.15); color: #A855F7; }
+  .tag-green { background: rgba(16,185,129,0.1); color: #10B981; }
+  .tag-amber { background: rgba(245,158,11,0.1); color: #F59E0B; }
+  input[type="range"] {
+    width: 100%;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--aura-surface2);
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--aura-pink);
+    cursor: pointer;
+  }
+  .fade-in { animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .shimmer {
+    background: linear-gradient(90deg, var(--aura-surface) 25%, var(--aura-surface2) 50%, var(--aura-surface) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 8px;
+  }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  .non-custodial-seal {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: 8px;
+    font-size: 10px;
+    color: #10B981;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<div id="phone">
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="notch"></div>
+    <div class="icons">
+      <span>5G</span>
+      <span>●●●</span>
+      <span>100%</span>
+    </div>
+  </div>
+
+  <div class="screen">
+
+    <!-- VIEW: SPLASH -->
+    <div class="view active" id="view-splash" style="justify-content:center;align-items:center;padding:32px;text-align:center;gap:0;">
+      <div style="margin-bottom:32px;">
+        <div style="width:72px;height:72px;border-radius:22px;background:linear-gradient(135deg,#7C3AED,#EC4899);margin:0 auto 20px;display:flex;align-items:center;justify-content:center;">
+          <span style="font-size:32px;font-weight:800;color:#fff;">A</span>
+        </div>
+        <h1 style="font-size:30px;font-weight:700;color:var(--aura-text);margin-bottom:6px;letter-spacing:-0.5px;">AuraFi</h1>
+        <p style="font-size:16px;color:var(--aura-pink);font-style:italic;font-weight:300;">Clareza para Investir.</p>
+      </div>
+      <div style="margin-bottom:40px;">
+        <div style="width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,rgba(124,58,237,0.2),rgba(236,72,153,0.2));border:1px solid rgba(236,72,153,0.2);margin:0 auto 24px;display:flex;align-items:center;justify-content:center;">
+          <div class="aura-avatar" style="width:60px;height:60px;font-size:24px;">A</div>
+        </div>
+        <h2 style="font-size:22px;font-weight:700;color:var(--aura-text);margin-bottom:10px;line-height:1.2;">Suas stablecoins<br>podem render mais.</h2>
+        <p style="font-size:14px;color:var(--aura-muted);line-height:1.6;">Decisões em DeFi com a clareza<br>de uma conversa em português.</p>
+      </div>
+      <div style="width:100%;display:flex;flex-direction:column;gap:12px;">
+        <button class="btn-primary" onclick="goTo('view-quiz')">Começar agora</button>
+        <button class="btn-secondary" onclick="goTo('view-quiz')">Já tenho conta · entrar</button>
+      </div>
+    </div>
+
+    <!-- VIEW: QUIZ -->
+    <div class="view" id="view-quiz" style="padding:24px;gap:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <button onclick="goTo('view-splash')" style="background:none;border:none;color:var(--aura-muted);font-size:14px;cursor:pointer;font-family:inherit;">← Voltar</button>
+        <button onclick="skipQuiz()" style="background:none;border:none;color:var(--aura-muted);font-size:14px;cursor:pointer;font-family:inherit;">Pular</button>
+      </div>
+      <div class="progress-bar-bg" style="margin-bottom:24px;">
+        <div class="progress-bar-fill" id="quiz-progress" style="width:20%"></div>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;">
+        <div class="aura-avatar">A</div>
+        <div class="chat-bubble bubble-aura" style="font-size:13px;">Vou te conhecer melhor pra recomendar com cuidado. 🤝</div>
+      </div>
+      <div id="quiz-question-area"></div>
+    </div>
+
+    <!-- VIEW: RESULT PERFIL -->
+    <div class="view" id="view-result" style="padding:24px;align-items:center;text-align:center;gap:0;justify-content:center;">
+      <div style="margin-bottom:24px;">
+        <div style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,var(--aura-purple),var(--aura-pink));margin:0 auto 16px;display:flex;align-items:center;justify-content:center;">
+          <span style="font-size:32px;">✓</span>
+        </div>
+        <h2 style="font-size:24px;font-weight:700;color:var(--aura-text);margin-bottom:8px;">Perfil: <span id="result-perfil-nome" style="color:var(--aura-pink);">Moderado</span></h2>
+        <p id="result-perfil-desc" style="font-size:14px;color:var(--aura-muted);line-height:1.6;max-width:280px;margin:0 auto;"></p>
+      </div>
+      <div class="card" style="width:100%;margin-bottom:20px;text-align:left;">
+        <div class="section-label">Com base no seu perfil</div>
+        <div id="result-protocols" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+      <button class="btn-primary" onclick="goToDashboard()">Ver meu painel →</button>
+    </div>
+
+    <!-- VIEW: DASHBOARD -->
+    <div class="view" id="view-dashboard" style="padding-bottom:8px;">
+      <div style="padding:20px 20px 0;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <p style="font-size:13px;color:var(--aura-muted);">Olá, Maria 👋</p>
+          <h1 style="font-size:22px;font-weight:700;color:var(--aura-text);">Meu Painel</h1>
+        </div>
+        <div style="position:relative;">
+          <div style="width:38px;height:38px;border-radius:50%;background:var(--aura-surface2);border:1px solid var(--aura-border);display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="goTo('view-config')">
+            <span style="font-size:18px;color:var(--aura-muted);">⚙</span>
+          </div>
+          <div style="position:absolute;top:-2px;right:-2px;width:10px;height:10px;background:var(--aura-pink);border-radius:50%;border:2px solid var(--aura-bg);"></div>
+        </div>
+      </div>
+      <!-- Patrimônio -->
+      <div style="padding:16px 20px;">
+        <div class="card-highlight">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <p style="font-size:11px;color:var(--aura-muted);margin-bottom:4px;">Patrimônio em stablecoins</p>
+              <p style="font-size:32px;font-weight:800;color:var(--aura-text);letter-spacing:-1px;">US$ 8.420</p>
+              <p style="font-size:12px;color:var(--aura-green);margin-top:4px;">+ US$ 47,12 (últimos 30d)</p>
+            </div>
+            <div class="non-custodial-seal">🔒 não-custodial</div>
+          </div>
+        </div>
+      </div>
+      <!-- Sugestão Aura -->
+      <div style="padding:0 20px 16px;">
+        <div style="background:rgba(124,58,237,0.1);border:1px solid rgba(124,58,237,0.25);border-radius:14px;padding:14px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;" onclick="goTo('view-chat')">
+          <div class="aura-avatar" style="width:30px;height:30px;font-size:12px;flex-shrink:0;">A</div>
+          <div>
+            <p style="font-size:12px;font-weight:600;color:var(--aura-purple-light);margin-bottom:3px;">Aura sugere</p>
+            <p style="font-size:13px;color:var(--aura-text);line-height:1.4;">Diversificar 60% Aave / 40% Compound reduz risco sem perder rendimento. <span style="color:var(--aura-pink);">Ver simulação →</span></p>
+          </div>
+        </div>
+      </div>
+      <!-- Oportunidades -->
+      <div style="padding:0 20px 16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div class="section-label" style="margin-bottom:0;">Oportunidades pra você</div>
+          <span style="font-size:12px;color:var(--aura-pink);cursor:pointer;" onclick="goTo('view-protocolos')">Ver todas →</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;" id="dashboard-protocols"></div>
+      </div>
+      <!-- Alertas -->
+      <div style="padding:0 20px 16px;">
+        <div class="section-label">Alertas recentes</div>
+        <div class="card" style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:32px;height:32px;background:rgba(245,158,11,0.15);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;">⚠</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;color:var(--aura-text);">APY do Aave caiu de 5,8% → 5,2%</p>
+            <p style="font-size:12px;color:var(--aura-muted);margin-top:2px;">Morpho tem 5,5% agora. Quer comparar?</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: AURA CHAT -->
+    <div class="view" id="view-chat" style="flex-direction:column;position:relative;">
+      <!-- Header -->
+      <div style="padding:16px 20px;background:var(--aura-surface);border-bottom:1px solid var(--aura-border);display:flex;align-items:center;gap:12px;flex-shrink:0;">
+        <button onclick="goTo('view-dashboard')" style="background:none;border:none;color:var(--aura-muted);font-size:20px;cursor:pointer;padding:0;display:flex;align-items:center;">←</button>
+        <div class="aura-avatar">A</div>
+        <div>
+          <p style="font-size:15px;font-weight:600;color:var(--aura-text);">Aura</p>
+          <p style="font-size:11px;color:var(--aura-green);">● online</p>
+        </div>
+      </div>
+      <!-- Messages -->
+      <div style="flex:1;overflow-y:auto;padding:16px 16px 8px;display:flex;flex-direction:column;gap:8px;" id="chat-messages">
+        <div style="text-align:center;margin:8px 0;">
+          <span style="font-size:11px;color:var(--aura-muted);background:var(--aura-surface);padding:4px 10px;border-radius:10px;">hoje</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <div class="aura-avatar" style="width:28px;height:28px;font-size:11px;flex-shrink:0;margin-bottom:2px;">A</div>
+          <div>
+            <div class="chat-bubble bubble-aura">Oi, Maria! Sou a Aura, sua assistente de DeFi em português. 👋<br><br>Vi que você tem US$ 8.420 em USDC parados. Posso te ajudar a encontrar onde esse dinheiro pode render mais com segurança. Como posso te ajudar hoje?</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;padding-left:36px;margin-top:4px;">
+          <button class="chip" onclick="sendPreset('Quais são as melhores opções pra meu perfil?')">💡 Melhores opções</button>
+          <button class="chip" onclick="sendPreset('Qual é o risco do Aave?')">🔍 Risco do Aave</button>
+          <button class="chip" onclick="sendPreset('Simular US$ 2.000 no Compound')">📊 Simular alocação</button>
+        </div>
+      </div>
+      <!-- Disclaimer -->
+      <div style="padding:4px 16px;flex-shrink:0;">
+        <p style="font-size:10px;color:var(--aura-muted);text-align:center;">Apoio à decisão · não-custodial · você decide</p>
+      </div>
+      <!-- Input -->
+      <div style="padding:10px 16px 16px;background:var(--aura-surface);border-top:1px solid var(--aura-border);display:flex;gap:10px;align-items:flex-end;flex-shrink:0;">
+        <div style="flex:1;background:var(--aura-bg);border:1px solid var(--aura-border);border-radius:20px;padding:10px 14px;display:flex;align-items:center;">
+          <textarea id="chat-input" placeholder="Pergunte algo à Aura..." rows="1" style="width:100%;background:none;border:none;outline:none;color:var(--aura-text);font-size:14px;resize:none;font-family:inherit;line-height:1.4;max-height:80px;overflow-y:auto;" onkeydown="handleChatKey(event)" oninput="autoResize(this)"></textarea>
+        </div>
+        <button onclick="sendChat()" style="width:40px;height:40px;border-radius:50%;background:var(--aura-pink);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px;color:#fff;">↑</button>
+      </div>
+    </div>
+
+    <!-- VIEW: SIMULAÇÃO -->
+    <div class="view" id="view-sim" style="padding-bottom:8px;">
+      <div style="padding:20px 20px 16px;border-bottom:1px solid var(--aura-border);">
+        <h1 style="font-size:22px;font-weight:700;color:var(--aura-text);">Simular</h1>
+        <p style="font-size:13px;color:var(--aura-muted);margin-top:2px;">E se eu alocar agora?</p>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
+        <!-- Protocolo -->
+        <div>
+          <div class="section-label">Protocolo</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sim-protocol-selector"></div>
+        </div>
+        <!-- Valor -->
+        <div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+            <div class="section-label" style="margin-bottom:0;">Valor a alocar</div>
+            <span style="font-size:15px;font-weight:600;color:var(--aura-text);">US$ <span id="sim-value-display">2.000</span></span>
+          </div>
+          <input type="range" min="100" max="8000" value="2000" step="100" id="sim-slider" oninput="updateSim()">
+          <div style="display:flex;justify-content:space-between;margin-top:6px;">
+            <span style="font-size:11px;color:var(--aura-muted);">US$ 100</span>
+            <span style="font-size:11px;color:var(--aura-muted);">US$ 8.000</span>
+          </div>
+        </div>
+        <!-- Prazo -->
+        <div>
+          <div class="section-label">Horizonte de tempo</div>
+          <div style="display:flex;gap:8px;">
+            <button class="chip selected" id="prazo-6" onclick="selectPrazo(6)">6 meses</button>
+            <button class="chip" id="prazo-12" onclick="selectPrazo(12)">12 meses</button>
+            <button class="chip" id="prazo-24" onclick="selectPrazo(24)">24 meses</button>
+          </div>
+        </div>
+        <!-- Resultado -->
+        <div class="card-highlight">
+          <div style="text-align:center;padding:8px 0;">
+            <p style="font-size:12px;color:var(--aura-muted);margin-bottom:4px;">Rendimento estimado</p>
+            <p class="apy-text" id="sim-rendimento" style="font-size:36px;">+ US$ 104</p>
+            <p style="font-size:12px;color:var(--aura-muted);margin-top:4px;">em <span id="sim-prazo-txt">12</span> meses</p>
+          </div>
+          <div class="divider"></div>
+          <div style="display:flex;justify-content:space-between;">
+            <div style="text-align:center;">
+              <p style="font-size:11px;color:var(--aura-muted);">Vs. parado</p>
+              <p style="font-size:14px;color:var(--aura-red);font-weight:600;" id="sim-vs-parado">US$ 0</p>
+            </div>
+            <div style="text-align:center;">
+              <p style="font-size:11px;color:var(--aura-muted);">APY atual</p>
+              <p style="font-size:14px;color:var(--aura-green);font-weight:600;" id="sim-apy">5,2%</p>
+            </div>
+            <div style="text-align:center;">
+              <p style="font-size:11px;color:var(--aura-muted);">Score</p>
+              <p style="font-size:14px;color:var(--aura-text);font-weight:600;" id="sim-score">9,2/10</p>
+            </div>
+          </div>
+        </div>
+        <!-- Explicação Aura -->
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          <div class="aura-avatar" style="width:28px;height:28px;font-size:11px;flex-shrink:0;margin-top:2px;">A</div>
+          <p style="font-size:13px;color:var(--aura-muted);line-height:1.5;" id="sim-aura-explain">Com seu perfil moderado, o Aave v3 é uma boa escolha. TVL de US$ 1,8 bi e auditado pela Trail of Bits. Risco considerado baixo para o DeFi.</p>
+        </div>
+        <button class="btn-primary" onclick="salvarSim()">Salvar plano</button>
+        <button class="btn-secondary" onclick="goTo('view-chat')" style="margin-top:-4px;">Perguntar à Aura sobre isso</button>
+      </div>
+    </div>
+
+    <!-- VIEW: PROTOCOLOS -->
+    <div class="view" id="view-protocolos" style="padding-bottom:8px;">
+      <div style="padding:20px 20px 16px;">
+        <h1 style="font-size:22px;font-weight:700;color:var(--aura-text);">Protocolos</h1>
+        <p style="font-size:13px;color:var(--aura-muted);margin-top:2px;">Curados para perfil moderado</p>
+      </div>
+      <div style="padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="chip selected">Todos</button>
+        <button class="chip">Lending</button>
+        <button class="chip">DEX</button>
+        <button class="chip">Aggregator</button>
+      </div>
+      <div style="padding:0 20px;display:flex;flex-direction:column;gap:10px;" id="protocolos-list"></div>
+    </div>
+
+    <!-- VIEW: HISTÓRICO -->
+    <div class="view" id="view-historico" style="padding-bottom:8px;">
+      <div style="padding:20px 20px 16px;">
+        <h1 style="font-size:22px;font-weight:700;color:var(--aura-text);">Histórico</h1>
+        <p style="font-size:13px;color:var(--aura-muted);margin-top:2px;">Suas decisões e o que aprendeu</p>
+      </div>
+      <div style="padding:0 20px;display:flex;gap:8px;margin-bottom:16px;">
+        <button class="chip selected">Tudo</button>
+        <button class="chip">Aceitas</button>
+        <button class="chip">Recusadas</button>
+      </div>
+      <div style="padding:0 20px;display:flex;flex-direction:column;gap:10px;" id="historico-list"></div>
+      <!-- Aprendizado Aura -->
+      <div style="padding:16px 20px;">
+        <div style="background:rgba(124,58,237,0.1);border:1px solid rgba(124,58,237,0.2);border-radius:14px;padding:14px;">
+          <p style="font-size:12px;font-weight:600;color:var(--aura-purple-light);margin-bottom:4px;">Você está aprendendo</p>
+          <p style="font-size:13px;color:var(--aura-muted);line-height:1.5;">85% das suas decisões favorecem risco moderado. A Aura ajustou as próximas recomendações automaticamente.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: CONFIG -->
+    <div class="view" id="view-config" style="padding-bottom:8px;">
+      <div style="padding:20px 20px 16px;display:flex;align-items:center;gap:12px;">
+        <button onclick="goTo('view-dashboard')" style="background:none;border:none;color:var(--aura-muted);font-size:20px;cursor:pointer;">←</button>
+        <h1 style="font-size:22px;font-weight:700;color:var(--aura-text);">Configurações</h1>
+      </div>
+      <!-- Avatar -->
+      <div style="padding:0 20px 20px;display:flex;align-items:center;gap:14px;">
+        <div style="width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,var(--aura-purple),var(--aura-pink));display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;">M</div>
+        <div>
+          <p style="font-size:16px;font-weight:600;color:var(--aura-text);">Maria S.</p>
+          <p style="font-size:12px;color:var(--aura-muted);">maria@gmail.com</p>
+          <span style="font-size:11px;color:var(--aura-pink);font-weight:500;">Premium · renova em 14d</span>
+        </div>
+      </div>
+      <div class="divider" style="margin:0 20px;"></div>
+      <div style="padding:16px 20px;display:flex;flex-direction:column;gap:2px;">
+        <div class="section-label">Perfil de risco</div>
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
+          <div>
+            <p style="font-size:14px;font-weight:500;color:var(--aura-text);">Moderado</p>
+            <p style="font-size:12px;color:var(--aura-muted);">atualizado em 01/jun/2026</p>
+          </div>
+          <span style="color:var(--aura-pink);font-size:13px;">refazer →</span>
+        </div>
+      </div>
+      <div style="padding:0 20px 16px;display:flex;flex-direction:column;gap:2px;">
+        <div class="section-label">Plano e pagamento</div>
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
+          <div>
+            <p style="font-size:14px;font-weight:500;color:var(--aura-text);">Premium · R$ 29,90/mês</p>
+            <p style="font-size:12px;color:var(--aura-muted);">próximo débito: 27/jun/2026</p>
+          </div>
+          <span style="color:var(--aura-pink);font-size:13px;">gerenciar →</span>
+        </div>
+      </div>
+      <div style="padding:0 20px 16px;">
+        <div class="section-label">Privacidade (LGPD)</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;color:var(--aura-text);">Baixar meus dados</span><span style="color:var(--aura-muted);">→</span></div>
+          <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;color:var(--aura-text);">Apagar meus dados</span><span style="color:var(--aura-muted);">→</span></div>
+          <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;color:var(--aura-text);">Política de privacidade</span><span style="color:var(--aura-muted);">→</span></div>
+        </div>
+      </div>
+      <div style="padding:0 20px 24px;">
+        <div class="section-label">Conta</div>
+        <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:14px;color:var(--aura-text);">Wallets conectadas (1)</span><span style="color:var(--aura-muted);">→</span></div>
+        <div class="card" style="cursor:pointer;"><span style="font-size:14px;color:var(--aura-red);">Sair</span></div>
+      </div>
+      <p style="text-align:center;font-size:10px;color:var(--aura-muted);padding-bottom:16px;">AuraFi v1.0.0 · CNPJ 00.000.000/0001-00</p>
+    </div>
+
+  </div><!-- /screen -->
+
+  <!-- TAB BAR -->
+  <div class="tab-bar" id="main-tab-bar" style="display:none;">
+    <div class="tab-item active" id="tab-dashboard" onclick="switchTab('dashboard')">
+      <span class="tab-icon">⌂</span>
+      <span class="tab-label">Início</span>
+    </div>
+    <div class="tab-item" id="tab-chat" onclick="switchTab('chat')">
+      <span class="tab-icon">A</span>
+      <span class="tab-label">Aura</span>
+    </div>
+    <div class="tab-item" id="tab-sim" onclick="switchTab('sim')">
+      <span class="tab-icon">◈</span>
+      <span class="tab-label">Simular</span>
+    </div>
+    <div class="tab-item" id="tab-protocolos" onclick="switchTab('protocolos')">
+      <span class="tab-icon">≡</span>
+      <span class="tab-label">Protocolos</span>
+    </div>
+    <div class="tab-item" id="tab-historico" onclick="switchTab('historico')">
+      <span class="tab-icon">◷</span>
+      <span class="tab-label">Histórico</span>
+    </div>
+  </div>
+
+</div><!-- /phone -->
+
+<script>
+const PROTOCOLS = [
+  { id:'aave', name:'Aave v3', token:'USDC', cat:'Lending', apy:5.2, score:9.2, tvl:'US$ 1,8 bi', chain:'Base', auditor:'Trail of Bits', color:'#10B981' },
+  { id:'compound', name:'Compound', token:'DAI', cat:'Lending', apy:4.7, score:8.5, tvl:'US$ 890 mi', chain:'Ethereum', auditor:'OpenZeppelin', color:'#F59E0B' },
+  { id:'morpho', name:'Morpho', token:'USDC', cat:'Lending', apy:5.5, score:8.8, tvl:'US$ 1,2 bi', chain:'Base', auditor:'Dedaub', color:'#A855F7' },
+  { id:'spark', name:'Spark', token:'DAI', cat:'Lending', apy:4.9, score:8.1, tvl:'US$ 650 mi', chain:'Ethereum', auditor:'ChainSecurity', color:'#3B82F6' },
+  { id:'curve', name:'Curve 3pool', token:'USDT', cat:'DEX', apy:3.8, score:9.5, tvl:'US$ 3,2 bi', chain:'Ethereum', auditor:'Trail of Bits', color:'#EC4899' },
+];
+
+const QUIZ_QUESTIONS = [
+  {
+    q: 'Se suas stables caíssem 10% num mês ruim, como você reagiria?',
+    opts: ['Sairia imediatamente', 'Esperaria entender antes de decidir', 'Aproveitaria pra alocar mais'],
+    weights: [0, 1, 2]
+  },
+  {
+    q: 'Qual frase descreve melhor seu objetivo?',
+    opts: ['Proteger o que tenho acima de tudo', 'Crescer com cuidado e segurança', 'Quero rendimento alto, aceito o risco'],
+    weights: [0, 1, 2]
+  },
+  {
+    q: 'Há quanto tempo você investe em cripto?',
+    opts: ['Menos de 1 ano', 'Entre 1 e 3 anos', 'Mais de 3 anos'],
+    weights: [0, 1, 2]
+  }
+];
+
+let currentView = 'view-splash';
+let quizStep = 0;
+let quizScore = 0;
+let selectedAnswer = null;
+let simProtocol = 'aave';
+let simPrazo = 12;
+let chatHistory = [];
+let isChatLoading = false;
+
+function goTo(viewId) {
+  document.getElementById(currentView).classList.remove('active');
+  document.getElementById(viewId).classList.add('active');
+  currentView = viewId;
+  const mainViews = ['view-dashboard','view-chat','view-sim','view-protocolos','view-historico'];
+  const tabBar = document.getElementById('main-tab-bar');
+  tabBar.style.display = mainViews.includes(viewId) ? 'flex' : 'none';
+  if (viewId === 'view-dashboard') populateDashboard();
+  if (viewId === 'view-protocolos') populateProtocolos();
+  if (viewId === 'view-historico') populateHistorico();
+  if (viewId === 'view-sim') initSim();
+}
+
+function switchTab(name) {
+  ['dashboard','chat','sim','protocolos','historico'].forEach(t => {
+    document.getElementById('tab-'+t).classList.remove('active');
+  });
+  document.getElementById('tab-'+name).classList.add('active');
+  goTo('view-'+name);
+}
+
+function goToDashboard() {
+  goTo('view-dashboard');
+  document.getElementById('main-tab-bar').style.display = 'flex';
+}
+
+function skipQuiz() {
+  quizScore = 2;
+  showResult();
+}
+
+function renderQuiz() {
+  const q = QUIZ_QUESTIONS[quizStep];
+  const progress = ((quizStep + 1) / (QUIZ_QUESTIONS.length + 1)) * 100;
+  document.getElementById('quiz-progress').style.width = progress + '%';
+  selectedAnswer = null;
+  const area = document.getElementById('quiz-question-area');
+  area.innerHTML = `
+    <h2 style="font-size:18px;font-weight:700;color:var(--aura-text);line-height:1.3;margin-bottom:20px;">${q.q}</h2>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
+      ${q.opts.map((o, i) => `
+        <div class="option-card" id="opt-${i}" onclick="selectOption(${i},${q.weights[i]})">
+          <div class="radio-circle" id="radio-${i}"></div>
+          <div>
+            <p style="font-size:14px;font-weight:500;color:var(--aura-text);">${o}</p>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <button class="btn-primary" id="quiz-next-btn" onclick="nextQuiz()" style="opacity:0.4;cursor:not-allowed;" disabled>Continuar</button>
+    <p style="font-size:12px;color:var(--aura-muted);text-align:center;margin-top:8px;cursor:pointer;" onclick="nextQuiz(true)">← Por que isso importa?</p>
+  `;
+}
+
+function selectOption(idx, weight) {
+  selectedAnswer = { idx, weight };
+  document.querySelectorAll('.option-card').forEach((c,i) => {
+    c.classList.toggle('selected', i === idx);
+    const r = document.getElementById('radio-'+i);
+    r.classList.toggle('selected', i === idx);
+  });
+  const btn = document.getElementById('quiz-next-btn');
+  btn.style.opacity = '1'; btn.style.cursor = 'pointer'; btn.disabled = false;
+}
+
+function nextQuiz(skip) {
+  if (!selectedAnswer && !skip) return;
+  if (selectedAnswer) quizScore += selectedAnswer.weight;
+  quizStep++;
+  if (quizStep >= QUIZ_QUESTIONS.length) showResult();
+  else renderQuiz();
+}
+
+function getPerfil() {
+  if (quizScore <= 1) return { nome:'Conservador', desc:'Você prioriza segurança acima de tudo. Vamos focar em protocolos com altíssimo score de segurança e TVL consolidado.', protocols:['aave','curve'] };
+  if (quizScore <= 3) return { nome:'Moderado', desc:'Equilíbrio entre segurança e rendimento. Ótimas oportunidades no Aave, Morpho e Compound com curadoria da Aura.', protocols:['aave','morpho','compound'] };
+  return { nome:'Arrojado', desc:'Você aceita mais risco em busca de rendimento. A Aura vai mostrar os melhores pools com APY elevado e te alertar sobre riscos.', protocols:['morpho','spark','compound'] };
+}
+
+function showResult() {
+  const p = getPerfil();
+  document.getElementById('result-perfil-nome').textContent = p.nome;
+  document.getElementById('result-perfil-desc').textContent = p.desc;
+  const el = document.getElementById('result-protocols');
+  el.innerHTML = p.protocols.map(pid => {
+    const pr = PROTOCOLS.find(x=>x.id===pid);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--aura-border);">
+      <div><p style="font-size:13px;font-weight:500;color:var(--aura-text);">${pr.name} · ${pr.token}</p><p style="font-size:11px;color:var(--aura-muted);">${pr.cat} · ${pr.chain}</p></div>
+      <div style="text-align:right;"><p class="apy-text" style="font-size:18px;">${pr.apy.toFixed(1)}%</p><span class="score-badge score-high">${pr.score}/10</span></div>
+    </div>`;
+  }).join('');
+  goTo('view-result');
+}
+
+function populateDashboard() {
+  const container = document.getElementById('dashboard-protocols');
+  if (!container) return;
+  const perfil = getPerfil();
+  const prots = PROTOCOLS.filter(p => perfil.protocols.includes(p.id)).slice(0,3);
+  container.innerHTML = prots.map(pr => `
+    <div class="card" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="showProtocolDetail('${pr.id}')">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <p style="font-size:14px;font-weight:600;color:var(--aura-text);">${pr.name} · ${pr.token}</p>
+          <span class="tag tag-purple">${pr.cat}</span>
+        </div>
+        <p style="font-size:11px;color:var(--aura-muted);">${pr.chain} · TVL ${pr.tvl}</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+          <span class="score-badge score-high">Score ${pr.score}/10 ✦ Escala 0–10, onde 10 = auditado e consolidado</span>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <p class="apy-text" style="font-size:22px;">${pr.apy.toFixed(1)}%</p>
+        <p style="font-size:10px;color:var(--aura-muted);">APY hoje</p>
+        <button class="btn-primary" style="margin-top:8px;padding:8px 12px;font-size:12px;" onclick="event.stopPropagation();switchTab('sim');setSimProtocol('${pr.id}')">Simular</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function setSimProtocol(pid) {
+  simProtocol = pid;
+  initSim();
+}
+
+function populateProtocolos() {
+  const el = document.getElementById('protocolos-list');
+  el.innerHTML = PROTOCOLS.map(pr => `
+    <div class="card fade-in" style="cursor:pointer;" onclick="showProtocolDetail('${pr.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+        <div>
+          <p style="font-size:15px;font-weight:600;color:var(--aura-text);">${pr.name}</p>
+          <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
+            <span class="tag tag-purple">${pr.cat}</span>
+            <span class="tag tag-green">${pr.chain}</span>
+            <span class="tag tag-amber">Auditado</span>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <p class="apy-text" style="font-size:22px;">${pr.apy.toFixed(1)}%</p>
+          <span class="score-badge score-high" style="white-space:nowrap;">Score ${pr.score}/10</span>
+        </div>
+      </div>
+      <div class="divider" style="margin:10px 0;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div><p style="font-size:11px;color:var(--aura-muted);">TVL: <span style="color:var(--aura-text);font-weight:500;">${pr.tvl}</span></p><p style="font-size:11px;color:var(--aura-muted);">Auditor: ${pr.auditor}</p></div>
+        <button class="btn-primary" style="width:auto;padding:8px 14px;font-size:12px;" onclick="event.stopPropagation();switchTab('sim');setSimProtocol('${pr.id}')">Simular →</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function populateHistorico() {
+  const hist = [
+    { date:'12/jun/2026', action:'simulou', protocol:'Aave v3 · USDC · US$ 2.000', result:'+US$ 12,40', accepted:true, note:'Aceitou · alocou via wallet' },
+    { date:'28/mai/2026', action:'simulou', protocol:'Yearn · USDT · US$ 5.000', result:'teria +US$ 24,18', accepted:false, note:'Recusou — "achei arriscado"' },
+    { date:'15/mai/2026', action:'simulou', protocol:'Compound · DAI · US$ 1.500', result:'+US$ 18,67', accepted:true, note:'Aceitou · alocou via wallet' },
+  ];
+  const el = document.getElementById('historico-list');
+  el.innerHTML = hist.map(h => `
+    <div class="card fade-in">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <p style="font-size:11px;color:var(--aura-muted);margin-bottom:4px;">${h.date} · ${h.action}</p>
+          <p style="font-size:14px;font-weight:600;color:var(--aura-text);">${h.protocol}</p>
+          <p style="font-size:12px;color:${h.accepted ? 'var(--aura-green)' : 'var(--aura-muted)'};margin-top:4px;">${h.accepted ? '✓' : '○'} ${h.note}</p>
+        </div>
+        <p style="font-size:14px;color:${h.accepted ? 'var(--aura-green)' : 'var(--aura-muted)'};font-weight:600;flex-shrink:0;">${h.result}</p>
+      </div>
+    </div>
+  `).join('');
+}
+
+function initSim() {
+  const selectorEl = document.getElementById('sim-protocol-selector');
+  if (selectorEl) {
+    selectorEl.innerHTML = PROTOCOLS.slice(0,4).map(p =>
+      `<button class="chip ${p.id===simProtocol?'selected':''}" onclick="selectSimProtocol('${p.id}')">${p.name}</button>`
+    ).join('');
+  }
+  updateSim();
+}
+
+function selectSimProtocol(pid) {
+  simProtocol = pid;
+  initSim();
+}
+
+function selectPrazo(m) {
+  simPrazo = m;
+  [6,12,24].forEach(p => {
+    const btn = document.getElementById('prazo-'+p);
+    if(btn) btn.classList.toggle('selected', p===m);
+  });
+  updateSim();
+}
+
+function updateSim() {
+  const slider = document.getElementById('sim-slider');
+  const val = slider ? parseInt(slider.value) : 2000;
+  document.getElementById('sim-value-display').textContent = val.toLocaleString('pt-BR');
+  const pr = PROTOCOLS.find(p=>p.id===simProtocol) || PROTOCOLS[0];
+  const apy = pr.apy / 100;
+  const rendimento = val * apy * (simPrazo/12);
+  document.getElementById('sim-rendimento').textContent = '+ US$ ' + rendimento.toFixed(2).replace('.',',');
+  document.getElementById('sim-vs-parado').textContent = 'US$ 0';
+  document.getElementById('sim-apy').textContent = pr.apy.toFixed(1) + '%';
+  document.getElementById('sim-score').textContent = pr.score + '/10';
+  document.getElementById('sim-prazo-txt').textContent = simPrazo;
+  const explains = {
+    aave: 'Com seu perfil moderado, o Aave v3 é uma boa escolha. TVL de US$ 1,8 bi e auditado pela Trail of Bits. Risco considerado baixo para o DeFi.',
+    compound: 'Compound é um dos protocolos mais antigos e testados. Atenção: gas fees mais altas na Ethereum mainnet podem reduzir o rendimento real em aportes pequenos.',
+    morpho: 'Morpho oferece APY superior ao Aave com risco similar. É mais recente, então TVL menor — monitore com atenção. Boa escolha para perfil moderado+.',
+    spark: 'Spark é lastreado no protocolo MakerDAO. Rendimento estável, mas concentrado em DAI. Diversifique entre stablecoins para reduzir risco de depegging.',
+    curve: 'Curve 3pool tem o maior score de segurança por ser o protocolo mais auditado e antigo. APY mais baixo, ideal para perfil conservador.',
+  };
+  document.getElementById('sim-aura-explain').textContent = explains[simProtocol] || explains.aave;
+}
+
+function salvarSim() {
+  alert('✓ Plano salvo! Você pode acessá-lo no Histórico.');
+}
+
+function showProtocolDetail(pid) {
+  switchTab('sim');
+  setSimProtocol(pid);
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg || isChatLoading) return;
+  input.value = '';
+  input.style.height = 'auto';
+  appendUserBubble(msg);
+  chatHistory.push({ role:'user', content: msg });
+  await callAura();
+}
+
+function sendPreset(msg) {
+  document.getElementById('chat-input').value = msg;
+  sendChat();
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 80) + 'px';
+}
+
+function appendUserBubble(msg) {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;justify-content:flex-end;';
+  div.innerHTML = `<div class="chat-bubble bubble-user fade-in">${escHtml(msg)}</div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendAuraBubble(msg, isStreaming) {
+  const el = document.getElementById('chat-messages');
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;gap:8px;align-items:flex-end;';
+  wrap.id = isStreaming ? 'streaming-bubble' : '';
+  const avatar = document.createElement('div');
+  avatar.className = 'aura-avatar';
+  avatar.style.cssText = 'width:28px;height:28px;font-size:11px;flex-shrink:0;margin-bottom:2px;';
+  avatar.textContent = 'A';
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble bubble-aura fade-in';
+  bubble.id = isStreaming ? 'streaming-text' : '';
+  bubble.innerHTML = msg;
+  wrap.appendChild(avatar);
+  wrap.appendChild(bubble);
+  el.appendChild(wrap);
+  el.scrollTop = el.scrollHeight;
+  return bubble;
+}
+
+function showTyping() {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.id = 'typing-indicator';
+  div.style.cssText = 'display:flex;gap:8px;align-items:flex-end;';
+  div.innerHTML = `<div class="aura-avatar" style="width:28px;height:28px;font-size:11px;flex-shrink:0;margin-bottom:2px;">A</div><div class="chat-bubble bubble-aura"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function removeTyping() {
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+const SYSTEM_PROMPT = `Você é a Aura, assistente de IA da AuraFi — plataforma mobile de apoio à decisão de alocação de stablecoins no ecossistema DeFi.
+
+SOBRE VOCÊ:
+- Tom: acolhedor, claro, honesto, sem jargão desnecessário
+- Idioma: sempre português brasileiro direto
+- Nunca use termos técnicos sem explicar em linguagem simples logo em seguida
+- Em vez de "Supply APY", diga "quanto pode render por ano"
+
+CONTEXTO DO USUÁRIO (Maria, 32 anos, SP):
+- Tem US$ 8.420 em USDC parados na exchange
+- Perfil de risco: moderado
+- Novata em DeFi, mas curiosa e não-técnica
+- Usa iPhone, prefere conversa rápida (3-7 min de sessão)
+
+PROTOCOLOS DISPONÍVEIS (dados simulados):
+- Aave v3 (USDC) · 5,2% APY · Score 9,2/10 · TVL US$ 1,8 bi · Base chain · Auditado pela Trail of Bits
+- Compound (DAI) · 4,7% APY · Score 8,5/10 · TVL US$ 890 mi · Ethereum · Auditado pela OpenZeppelin
+- Morpho (USDC) · 5,5% APY · Score 8,8/10 · TVL US$ 1,2 bi · Base chain · Auditado pela Dedaub
+- Spark (DAI) · 4,9% APY · Score 8,1/10 · TVL US$ 650 mi · Ethereum · Auditado pela ChainSecurity
+- Curve 3pool (USDT) · 3,8% APY · Score 9,5/10 · TVL US$ 3,2 bi · Ethereum · Trail of Bits
+
+REGRAS CRÍTICAS:
+1. NUNCA prometa retorno garantido — sempre use "pode render", "estimativa", "histórico"
+2. NUNCA aconselhe juridicamente ou como assessor de valores mobiliários
+3. SEMPRE mencione riscos relevantes de forma clara
+4. SEMPRE lembre que a AuraFi não tem custódia dos fundos
+5. SEMPRE estimule que o usuário tome a decisão final
+6. Score de segurança: escala 0–10, onde 10 = máximo de segurança (auditado, testado, grande TVL)
+7. Respostas devem ser curtas (máx 4 parágrafos) e conversacionais
+8. Se perguntarem sobre simulação específica, calcule: Valor × APY × (meses/12) = rendimento estimado
+
+PERSONALIDADE:
+- Nunca diga "Olá" de novo se já cumprimentou
+- Use frases como "boa pergunta", "olha", "é assim:"
+- Finalize com uma pergunta curta ou sugestão de próxima ação`;
+
+async function callAura() {
+  isChatLoading = true;
+  showTyping();
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: SYSTEM_PROMPT,
+        messages: chatHistory.map(m => ({ role: m.role, content: m.content }))
+      })
+    });
+    const data = await response.json();
+    removeTyping();
+    const text = data.content?.[0]?.text || 'Desculpa, não consegui processar agora. Tenta de novo?';
+    chatHistory.push({ role: 'assistant', content: text });
+    const formatted = text.replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
+    appendAuraBubble(formatted, false);
+  } catch (err) {
+    removeTyping();
+    appendAuraBubble('Sem conexão agora. Te mostro o que sei: tenta perguntar sobre Aave, Compound ou como funciona o APY. 😊', false);
+  }
+  isChatLoading = false;
+}
+
+// Init
+renderQuiz();
+</script>
+</body>
+</html>
