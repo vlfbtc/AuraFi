@@ -24,8 +24,6 @@ aurafi/
 │   └── index.html     # Protótipo funcional com IA real
 ├── backend/           # API FastAPI (Python 3.12)
 │   ├── main.py
-│   ├── routers/
-│   ├── services/
 │   └── requirements.txt
 └── README.md
 ```
