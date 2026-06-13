@@ -27,10 +27,6 @@ aurafi/
 │   ├── routers/
 │   ├── services/
 │   └── requirements.txt
-├── docs/              # Documentação acadêmica
-│   ├── arquitetura.md
-│   └── usabilidade.md
-├── .env.example
 └── README.md
 ```
 
