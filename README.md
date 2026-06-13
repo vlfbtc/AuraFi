@@ -4,6 +4,8 @@
 
 **Startup One 2026 · Enterprise Challenge — Claro**
 
+**Repositório oficial:** https://github.com/vlfbtc/AuraFi
+
 ## Sobre o Projeto
 
 A AuraFi é uma plataforma mobile que traduz a complexidade do ecossistema DeFi em recomendações claras e personalizadas, usando Inteligência Artificial generativa em português brasileiro.
@@ -43,8 +45,8 @@ O protótipo de alta fidelidade está em `frontend/index.html`. Ele inclui:
 
 ```bash
 # Clone o repositório
-git clone https://github.com/SEU_USUARIO/aurafi.git
-cd aurafi
+git clone https://github.com/vlfbtc/AuraFi.git
+cd AuraFi
 
 # Abra o protótipo no browser (não precisa de servidor)
 open frontend/index.html
@@ -66,20 +68,29 @@ open frontend/index.html
 
 ```bash
 cd backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload
+python -m uvicorn main:app --reload
 ```
 
 ### Variáveis de ambiente
 
-Copie `.env.example` para `.env` e preencha:
+Copie `backend/.env.example` para `backend/.env` e preencha:
+
+```bash
+cp backend/.env.example backend/.env
+```
 
 ```env
+# Obrigatório
 ANTHROPIC_API_KEY=sk-ant-...
-AWS_REGION=sa-east-1
-DATABASE_URL=postgresql://user:pass@host:5432/aurafi
-REDIS_URL=redis://localhost:6379
-DEFI_LLAMA_BASE_URL=https://yields.llama.fi
+
+# Opcional (fases futuras)
+# AWS_REGION=sa-east-1
+# DATABASE_URL=postgresql://user:pass@host:5432/aurafi
+# REDIS_URL=redis://localhost:6379
+# DEFI_LLAMA_BASE_URL=https://yields.llama.fi
 ```
 
 ---
