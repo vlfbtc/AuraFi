@@ -1,0 +1,65 @@
+{{ config(materialized='view') }}
+
+with source_events as (
+    select *
+    from {{ ref('mvp_test_events') }}
+)
+
+select
+    cast(event_id as {{ dbt.type_string() }}) as event_id,
+    cast(event_type as {{ dbt.type_string() }}) as event_type,
+    cast(test_case_id as {{ dbt.type_string() }}) as test_case_id,
+    cast(is_test_data as {{ dbt.type_boolean() }}) as is_test_data,
+    cast(source_system as {{ dbt.type_string() }}) as source_system,
+    cast(occurred_at as {{ dbt.type_timestamp() }}) as occurred_at,
+    cast(user_pseudo_id as {{ dbt.type_string() }}) as user_pseudo_id,
+    cast(user_version as integer) as user_version,
+    cast(user_valid_from as {{ dbt.type_timestamp() }}) as user_valid_from,
+    cast(user_valid_to as {{ dbt.type_timestamp() }}) as user_valid_to,
+    cast(risk_profile as {{ dbt.type_string() }}) as risk_profile,
+    cast(risk_status as {{ dbt.type_string() }}) as risk_status,
+    cast(risk_version as integer) as risk_version,
+    cast(risk_source as {{ dbt.type_string() }}) as risk_source,
+    cast(risk_declared_at as {{ dbt.type_timestamp() }}) as risk_declared_at,
+    cast(channel_name as {{ dbt.type_string() }}) as channel_name,
+    cast(channel_adapter as {{ dbt.type_string() }}) as channel_adapter,
+    cast(channel_simulated as {{ dbt.type_boolean() }}) as channel_simulated,
+    cast(recommendation_id as {{ dbt.type_string() }}) as recommendation_id,
+    cast(recommendation_status as {{ dbt.type_string() }}) as recommendation_status,
+    cast(profile_used as {{ dbt.type_string() }}) as profile_used,
+    cast(opportunity_id as {{ dbt.type_string() }}) as opportunity_id,
+    cast(pool_name as {{ dbt.type_string() }}) as pool_name,
+    cast(protocol_name as {{ dbt.type_string() }}) as protocol_name,
+    cast(asset_symbol as {{ dbt.type_string() }}) as asset_symbol,
+    cast(asset_type as {{ dbt.type_string() }}) as asset_type,
+    cast(blockchain_name as {{ dbt.type_string() }}) as blockchain_name,
+    cast(recommended_apy_percent as numeric(12, 4)) as recommended_apy_percent,
+    cast(simulated_value as numeric(18, 2)) as simulated_value,
+    cast(confidence_score as numeric(8, 4)) as confidence_score,
+    cast(decision_accepted as {{ dbt.type_boolean() }}) as decision_accepted,
+    cast(decision_time_seconds as integer) as decision_time_seconds,
+    cast(input_tokens as integer) as input_tokens,
+    cast(output_tokens as integer) as output_tokens,
+    cast(llm_cost_usd as numeric(12, 6)) as llm_cost_usd,
+    cast(session_id as {{ dbt.type_string() }}) as session_id,
+    cast(conversation_id as {{ dbt.type_string() }}) as conversation_id,
+    cast(previous_session_id as {{ dbt.type_string() }}) as previous_session_id,
+    cast(session_started_at as {{ dbt.type_timestamp() }}) as session_started_at,
+    cast(session_ended_at as {{ dbt.type_timestamp() }}) as session_ended_at,
+    cast(message_count as integer) as message_count,
+    cast(session_duration_seconds as integer) as session_duration_seconds,
+    cast(continuity_flag as {{ dbt.type_boolean() }}) as continuity_flag,
+    cast(fallback_used as {{ dbt.type_boolean() }}) as fallback_used,
+    cast(escalation_flag as {{ dbt.type_boolean() }}) as escalation_flag,
+    cast(yield_apy_percent as numeric(12, 4)) as yield_apy_percent,
+    cast(tvl_usd as numeric(18, 2)) as tvl_usd,
+    cast(liquidity_level as {{ dbt.type_string() }}) as liquidity_level,
+    cast(market_source as {{ dbt.type_string() }}) as market_source,
+    cast(market_mode as {{ dbt.type_string() }}) as market_mode,
+    cast(observed_at as {{ dbt.type_timestamp() }}) as observed_at,
+    cast(retrieved_at as {{ dbt.type_timestamp() }}) as retrieved_at,
+    cast(is_stale as {{ dbt.type_boolean() }}) as is_stale,
+    cast(read_only as {{ dbt.type_boolean() }}) as read_only
+from source_events
+where is_test_data = true
+

@@ -1,0 +1,1 @@
+"""Testes estáticos de contrato."""

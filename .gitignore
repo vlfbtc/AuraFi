@@ -1,7 +1,4 @@
-# macOS
-.DS_Store
-
-# Python
+# Python caches and compiled artifacts
 __pycache__/
 *.py[cod]
 *$py.class
@@ -14,31 +11,39 @@ dist/
 *.egg
 pip-wheel-metadata/
 
+# Frontend dependencies and build output
+node_modules/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Runtime data and local diagnostics
+.runtime/
+*.log
+
+# Internal project context
+.aurafi-internal/
+
+# Python test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage*
+htmlcov/
+
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
 
-# Tool caches and test artifacts
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.pyre/
-.coverage
-.coverage.*
-htmlcov/
-
-# Logs
-*.log
-
-# Local environment/secrets
-.env
-.env.*
-*.local
-
-# IDE/editor
+# IDE/editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
+.DS_Store
