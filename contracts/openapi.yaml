@@ -1,0 +1,1542 @@
+openapi: 3.0.3
+info:
+  title: AuraFi API
+  version: 1.0.0
+  description: >-
+    Contrato inicial da API do AuraFi para o MVP. A API oferece apoio à decisão
+    sobre oportunidades DeFi, sem custódia, sem execução de transações e sem
+    promessa de retorno. Os identificadores são estáveis em inglês; textos
+    exibidos ao usuário devem ser apresentados em pt-BR.
+  x-mvp-scope:
+    channels:
+      - web_widget
+      - ios_app
+      - simulated
+    authentication: internal_email_otp
+    wallet_execution: excluded
+    open_finance: excluded
+    custody: excluded
+  x-integration-constraints:
+    defi_data:
+      provider: DeFiLlama
+      access: read_only
+      modes:
+        - live
+        - cache
+        - test
+        - fallback
+    llm:
+      capability: recommendations_and_conversation
+      provider: Claude-compatible interface
+      mockable: true
+      real_provider_required_for_mvp: false
+    wallet:
+      endpoints: absent
+      execution: prohibited
+    open_finance:
+      endpoints: absent
+servers:
+  - url: https://api.example.invalid
+    description: URL lógica do contrato; o ambiente de execução será definido posteriormente.
+tags:
+  - name: health
+    description: Verificação de disponibilidade da API.
+  - name: auth
+    description: Conta interna e autenticação por e-mail/OTP.
+  - name: profile
+    description: Perfil declarado e perfil de risco.
+  - name: opportunities
+    description: Catálogo somente leitura de oportunidades DeFi.
+  - name: simulations
+    description: Projeções educativas sem execução de alocação.
+  - name: recommendations
+    description: Apoio à decisão com justificativa, riscos e disclaimer.
+  - name: conversations
+    description: Conversas do Hub com continuidade entre canais do MVP.
+  - name: alerts
+    description: Alertas de mudanças observadas em oportunidades.
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Verifica a saúde da API
+      description: Não exige autenticação e não expõe detalhes sensíveis de infraestrutura.
+      operationId: getHealth
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: API disponível.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestIdResponse'
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationIdResponse'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/auth/otp/request:
+    post:
+      tags: [auth]
+      summary: Solicita um desafio OTP por e-mail
+      description: >-
+        Cria um desafio de uso único para a conta interna. O contrato não
+        escolhe provedor externo de autenticação e a entrega pode ser simulada
+        em desenvolvimento e testes. A resposta não confirma se o e-mail já
+        possui conta.
+      operationId: requestOtp
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ChannelHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpRequest'
+      responses:
+        '202':
+          description: Desafio criado ou solicitação tratada de forma indistinguível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpRequestResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/auth/otp/verify:
+    post:
+      tags: [auth]
+      summary: Verifica o OTP e abre uma sessão
+      description: A sessão emitida é a identidade canônica compartilhada pelos canais do MVP.
+      operationId: verifyOtp
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpVerification'
+      responses:
+        '200':
+          description: OTP válido e sessão criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Renova uma sessão
+      description: Renova o token de sessão sem alterar a identidade da conta.
+      operationId: refreshSession
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Sessão renovada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Encerra a sessão atual
+      operationId: logout
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '204':
+          description: Sessão encerrada.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/profile:
+    get:
+      tags: [profile]
+      summary: Consulta a conta e o perfil declarado
+      operationId: getProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: Perfil atual da conta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/profile/risk:
+    put:
+      tags: [profile]
+      summary: Registra ou substitui o perfil de risco declarado
+      description: >-
+        O perfil é declarado pelo usuário e não representa uma classificação
+        regulatória. Recomendações ficam indisponíveis até que exista um perfil
+        declarado válido.
+      operationId: setRiskProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiskProfileInput'
+      responses:
+        '200':
+          description: Perfil declarado registrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v1/opportunities:
+    get:
+      tags: [opportunities]
+      summary: Lista oportunidades DeFi disponíveis
+      description: >-
+        Consulta somente leitura. Os campos de mercado sempre informam fonte,
+        momento observado, momento de recuperação e eventual uso de cache ou
+        fallback.
+      operationId: listOpportunities
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/PageParameter'
+        - $ref: '#/components/parameters/PageSizeParameter'
+        - name: risk_profile
+          in: query
+          description: Filtra pelo perfil declarado, quando informado.
+          required: false
+          schema:
+            $ref: '#/components/schemas/RiskProfileLevel'
+        - name: asset
+          in: query
+          description: Filtra pelo símbolo do ativo estável.
+          required: false
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 20
+        - name: blockchain
+          in: query
+          description: Filtra pela blockchain da oportunidade.
+          required: false
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 80
+      responses:
+        '200':
+          description: Lista paginada de oportunidades.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/MarketDataUnavailable'
+
+  /v1/opportunities/{opportunity_id}:
+    get:
+      tags: [opportunities]
+      summary: Consulta os detalhes de uma oportunidade
+      operationId: getOpportunity
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OpportunityIdParameter'
+      responses:
+        '200':
+          description: Detalhes da oportunidade.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/MarketDataUnavailable'
+
+  /v1/simulations:
+    post:
+      tags: [simulations]
+      summary: Cria uma simulação educativa
+      description: >-
+        Calcula cenários para uma oportunidade sem movimentar fundos. Este
+        endpoint nunca cria transação, nunca solicita assinatura e não exige
+        wallet conectada.
+      operationId: createSimulation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulationInput'
+      responses:
+        '201':
+          description: Simulação criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/MarketDataUnavailable'
+
+  /v1/recommendations:
+    post:
+      tags: [recommendations]
+      summary: Gera uma recomendação explicável
+      description: >-
+        Exige perfil de risco declarado. A recomendação é apoio à decisão,
+        não constitui ordem, consultoria personalizada ou garantia de retorno.
+        A camada LLM é acessada por uma interface mockável; o uso de um
+        provedor real não é pré-requisito do MVP.
+      operationId: createRecommendation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationInput'
+      responses:
+        '201':
+          description: Recomendação criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Perfil de risco ausente ou oportunidade inelegível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/RecommendationUnavailable'
+
+  /v1/conversations:
+    post:
+      tags: [conversations]
+      summary: Inicia uma conversa no Hub
+      description: >-
+        Cria uma sessão conversacional vinculada à identidade interna e ao
+        canal informado. O mesmo contexto pode ser continuado no Web Widget,
+        app iOS ou canal simulado, respeitando consentimento.
+      operationId: createConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ChannelHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationCreateInput'
+      responses:
+        '201':
+          description: Conversa criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v1/conversations/{conversation_id}:
+    get:
+      tags: [conversations]
+      summary: Consulta uma conversa
+      operationId: getConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ConversationIdParameter'
+      responses:
+        '200':
+          description: Conversa e mensagens canônicas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/conversations/{conversation_id}/messages:
+    post:
+      tags: [conversations]
+      summary: Envia uma mensagem ao Hub
+      description: >-
+        A resposta pode indicar fallback para FAQ ou atendimento humano quando
+        a IA estiver indisponível ou a solicitação estiver em zona cinzenta.
+        O envelope canônico está definido em contracts/message-envelope.md.
+      operationId: sendConversationMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/ConversationIdParameter'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageInput'
+      responses:
+        '201':
+          description: Mensagem aceita e resposta do Hub produzida ou encaminhada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v1/alerts:
+    get:
+      tags: [alerts]
+      summary: Lista alertas da conta
+      description: Alertas são informativos e não executam nenhuma ação financeira.
+      operationId: listAlerts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/PageParameter'
+        - $ref: '#/components/parameters/PageSizeParameter'
+        - name: unread_only
+          in: query
+          description: Retorna somente alertas não lidos quando true.
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Lista paginada de alertas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/alerts/{alert_id}:
+    patch:
+      tags: [alerts]
+      summary: Atualiza o estado de leitura de um alerta
+      operationId: updateAlert
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/AlertIdParameter'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertUpdateInput'
+      responses:
+        '200':
+          description: Estado do alerta atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: AuraFiSession
+      description: Token de sessão emitido pela conta interna após validação de e-mail/OTP.
+  parameters:
+    RequestIdHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Identificador da requisição; o servidor gera um UUID quando ausente.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    CorrelationIdHeader:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: Identificador que acompanha uma jornada entre API, Hub e adaptadores.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ChannelHeader:
+      name: X-Channel
+      in: header
+      required: false
+      description: Canal de entrada; o corpo também pode declarar o canal quando aplicável.
+      schema:
+        $ref: '#/components/schemas/Channel'
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Chave para evitar duplicação em comandos repetíveis.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    OpportunityIdParameter:
+      name: opportunity_id
+      in: path
+      required: true
+      description: Identificador público da oportunidade.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ConversationIdParameter:
+      name: conversation_id
+      in: path
+      required: true
+      description: Identificador público da conversa.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    AlertIdParameter:
+      name: alert_id
+      in: path
+      required: true
+      description: Identificador público do alerta.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    PageParameter:
+      name: page
+      in: query
+      required: false
+      description: Página iniciando em 1.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        default: 1
+    PageSizeParameter:
+      name: page_size
+      in: query
+      required: false
+      description: Quantidade de itens por página.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 20
+  headers:
+    RequestIdResponse:
+      description: Identificador único da requisição processada.
+      schema:
+        type: string
+    CorrelationIdResponse:
+      description: Identificador de correlação propagado ou criado pelo servidor.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Requisição malformada.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Sessão ausente, inválida ou expirada.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ValidationError:
+      description: Dados válidos em formato, mas inválidos para o contrato.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Recurso não encontrado para a identidade atual.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflito de estado ou de idempotência.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Limite de requisições excedido.
+      headers:
+        Retry-After:
+          description: Segundos até nova tentativa.
+          schema:
+            type: integer
+            format: int32
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: Serviço temporariamente indisponível.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    MarketDataUnavailable:
+      description: Dados DeFi indisponíveis e sem snapshot utilizável.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RecommendationUnavailable:
+      description: Motor de recomendação indisponível; nenhum comando financeiro foi executado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ApiMeta:
+      type: object
+      required:
+        - request_id
+        - correlation_id
+        - generated_at
+        - disclaimer
+      properties:
+        request_id:
+          type: string
+          description: Identificador da requisição.
+        correlation_id:
+          type: string
+          description: Identificador de correlação da jornada.
+        generated_at:
+          type: string
+          format: date-time
+          description: Momento de geração da resposta em UTC.
+        disclaimer:
+          type: string
+          description: Aviso obrigatório de apoio à decisão e ausência de garantia de retorno.
+        data_sources:
+          type: array
+          description: Fontes usadas na resposta, quando houver dados de mercado.
+          items:
+            $ref: '#/components/schemas/DeFiDataSource'
+        llm:
+          $ref: '#/components/schemas/LlmMetadata'
+    ErrorResponse:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    ErrorDetail:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          description: Código estável para tratamento pelos clientes.
+          example: PROFILE_REQUIRED
+        message:
+          type: string
+          description: Mensagem segura e legível em pt-BR.
+        details:
+          type: object
+          additionalProperties: true
+          description: Dados de diagnóstico não sensíveis e específicos do erro.
+        retryable:
+          type: boolean
+          description: Indica se repetir a requisição pode resolver o erro.
+    HealthResponse:
+      type: object
+      required: [status, version, checks, meta]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, degraded, unavailable, not_configured]
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    Channel:
+      type: string
+      description: Canal do MVP que transporta a mensagem ou a jornada.
+      enum: [web_widget, ios_app, simulated]
+    ChannelContext:
+      type: object
+      required: [name, adapter]
+      properties:
+        name:
+          $ref: '#/components/schemas/Channel'
+        adapter:
+          type: string
+          description: Nome técnico do adaptador, sem pressupor provedor externo.
+        external_message_id:
+          type: string
+          description: Identificador no canal, quando existir.
+        simulated:
+          type: boolean
+          default: false
+    Identity:
+      type: object
+      required: [account_id, subject_type]
+      properties:
+        account_id:
+          type: string
+          description: Identificador interno/pseudonimizado da conta.
+        subject_type:
+          type: string
+          enum: [account]
+        email_verified:
+          type: boolean
+        channel_identity_id:
+          type: string
+          description: Identificador interno da identidade no adaptador atual.
+    Session:
+      type: object
+      required: [session_id, expires_at]
+      properties:
+        session_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+    Consent:
+      type: object
+      required: [purpose, status, policy_version]
+      properties:
+        purpose:
+          type: string
+          enum: [decision_support, conversation, memory, analytics]
+        status:
+          type: string
+          enum: [granted, denied, revoked]
+        policy_version:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+        memory:
+          type: boolean
+          description: Permissão para continuidade contextual da conversa.
+        analytics:
+          type: boolean
+          description: Permissão para uso analítico conforme política aprovada.
+    DeFiDataSource:
+      type: object
+      required: [source, mode, observed_at, retrieved_at, read_only, is_stale]
+      properties:
+        source:
+          type: string
+          enum: [defillama]
+          description: Fonte de dados de mercado do MVP.
+        mode:
+          type: string
+          enum: [live, cache, test, fallback]
+          description: Modo usado para obter o snapshot.
+        observed_at:
+          type: string
+          format: date-time
+          description: Momento em que o dado de mercado foi observado na fonte.
+        retrieved_at:
+          type: string
+          format: date-time
+          description: Momento em que o AuraFi recuperou o dado.
+        cache_expires_at:
+          type: string
+          format: date-time
+          description: Prazo de validade do cache, quando aplicável.
+        read_only:
+          type: boolean
+          enum: [true]
+          description: A integração DeFiLlama é somente leitura.
+        is_stale:
+          type: boolean
+          description: Indica que o snapshot pode estar desatualizado.
+        freshness_note:
+          type: string
+          description: Explicação em pt-BR para cache, fallback ou atraso.
+    LlmMetadata:
+      type: object
+      required: [mode, mockable, explainability]
+      properties:
+        mode:
+          type: string
+          enum: [mock, provider]
+          description: Indica se a resposta veio do mock ou de um adaptador de provedor.
+        provider:
+          type: string
+          nullable: true
+          enum: [claude, mock]
+          description: Provedor lógico; a escolha de infraestrutura não é parte deste contrato.
+        model:
+          type: string
+          nullable: true
+        prompt_version:
+          type: string
+          description: Versão do prompt/política usada para gerar a saída.
+        mockable:
+          type: boolean
+          enum: [true]
+        explainability:
+          type: string
+          enum: [structured, unavailable]
+          description: A resposta deve preferir justificativa estruturada.
+        fallback:
+          type: string
+          nullable: true
+          enum: [faq, human_support]
+    Pagination:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+        has_next:
+          type: boolean
+    OtpRequest:
+      type: object
+      required: [email, channel]
+      properties:
+        email:
+          type: string
+          format: email
+        channel:
+          $ref: '#/components/schemas/Channel'
+    OtpRequestResponse:
+      type: object
+      required: [challenge_id, expires_at, delivery, meta]
+      properties:
+        challenge_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        delivery:
+          type: string
+          enum: [email, mock]
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    OtpVerification:
+      type: object
+      required: [challenge_id, otp]
+      properties:
+        challenge_id:
+          type: string
+        otp:
+          type: string
+          pattern: '^[0-9]{6}$'
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    Account:
+      type: object
+      required: [account_id, email, email_verified]
+      properties:
+        account_id:
+          type: string
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    AuthSession:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_at, account]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_at:
+          type: string
+          format: date-time
+        account:
+          $ref: '#/components/schemas/Account'
+    AuthResponse:
+      type: object
+      required: [session, meta]
+      properties:
+        session:
+          $ref: '#/components/schemas/AuthSession'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    RiskProfileLevel:
+      type: string
+      description: Identificador técnico para conservador, moderado ou arrojado.
+      enum: [conservative, moderate, aggressive]
+    RiskAnswer:
+      type: object
+      required: [question_id, answer]
+      properties:
+        question_id:
+          type: string
+        answer:
+          type: string
+          minLength: 1
+          maxLength: 200
+    RiskProfileInput:
+      type: object
+      required: [declared_profile, answers]
+      properties:
+        declared_profile:
+          $ref: '#/components/schemas/RiskProfileLevel'
+        answers:
+          type: array
+          minItems: 5
+          maxItems: 5
+          description: Respostas do questionário mínimo de cinco perguntas.
+          items:
+            $ref: '#/components/schemas/RiskAnswer'
+        consent:
+          $ref: '#/components/schemas/Consent'
+    RiskProfile:
+      type: object
+      required: [declared_profile, status, version, declared_at]
+      properties:
+        declared_profile:
+          $ref: '#/components/schemas/RiskProfileLevel'
+        status:
+          type: string
+          enum: [declared, missing]
+        version:
+          type: string
+        declared_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [questionnaire, manual]
+    Profile:
+      type: object
+      required: [account, risk_profile, meta]
+      properties:
+        account:
+          $ref: '#/components/schemas/Account'
+        risk_profile:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/RiskProfile'
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    ProfileResponse:
+      $ref: '#/components/schemas/Profile'
+    Opportunity:
+      type: object
+      required:
+        - opportunity_id
+        - protocol
+        - pool
+        - asset
+        - blockchain
+        - apy
+        - tvl
+        - liquidity
+        - risk
+        - data_source
+        - disclaimer
+      properties:
+        opportunity_id:
+          type: string
+        protocol:
+          type: string
+        pool:
+          type: string
+        asset:
+          type: string
+        blockchain:
+          type: string
+        apy:
+          type: object
+          required: [value, unit, observed_at]
+          properties:
+            value:
+              type: number
+              format: double
+              minimum: 0
+            unit:
+              type: string
+              enum: [percent_annualized]
+            observed_at:
+              type: string
+              format: date-time
+        tvl:
+          type: object
+          required: [value, currency, observed_at]
+          properties:
+            value:
+              type: number
+              format: double
+              minimum: 0
+            currency:
+              type: string
+            observed_at:
+              type: string
+              format: date-time
+        liquidity:
+          type: object
+          required: [level, observed_at]
+          properties:
+            level:
+              type: string
+              enum: [low, medium, high, unknown]
+            value:
+              type: number
+              format: double
+              minimum: 0
+            currency:
+              type: string
+            observed_at:
+              type: string
+              format: date-time
+        audit_status:
+          type: string
+          enum: [audited, partially_audited, not_verified, unknown]
+        risk:
+          type: object
+          required: [score, level, dimensions]
+          properties:
+            score:
+              type: number
+              format: double
+              minimum: 0
+              maximum: 100
+            level:
+              type: string
+              enum: [low, medium, high, unknown]
+            dimensions:
+              type: array
+              items:
+                type: string
+                enum: [smart_contract, liquidity, volatility, underlying_asset, counterparty, data_quality]
+        eligibility:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [eligible, ineligible, needs_profile, unknown]
+            reason:
+              type: string
+        data_source:
+          $ref: '#/components/schemas/DeFiDataSource'
+        disclaimer:
+          type: string
+    OpportunityListResponse:
+      type: object
+      required: [items, pagination, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Opportunity'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    OpportunityResponse:
+      type: object
+      required: [opportunity, meta]
+      properties:
+        opportunity:
+          $ref: '#/components/schemas/Opportunity'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    SimulationInput:
+      type: object
+      required: [opportunity_id, amount, asset, horizons_days]
+      properties:
+        opportunity_id:
+          type: string
+        amount:
+          type: number
+          format: double
+          minimum: 0
+          exclusiveMinimum: true
+        asset:
+          type: string
+        horizons_days:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: integer
+            enum: [30, 180, 365]
+        compare_idle_stablecoin:
+          type: boolean
+          default: true
+    Simulation:
+      type: object
+      required: [simulation_id, opportunity_id, input, scenarios, assumptions, execution_supported, disclaimer]
+      properties:
+        simulation_id:
+          type: string
+        opportunity_id:
+          type: string
+        input:
+          $ref: '#/components/schemas/SimulationInput'
+        scenarios:
+          type: array
+          items:
+            type: object
+            required: [horizon_days, projected_value, projected_yield, currency]
+            properties:
+              horizon_days:
+                type: integer
+              projected_value:
+                type: number
+                format: double
+              projected_yield:
+                type: number
+                format: double
+              idle_stablecoin_value:
+                type: number
+                format: double
+              currency:
+                type: string
+        assumptions:
+          type: array
+          items:
+            type: string
+        generated_at:
+          type: string
+          format: date-time
+        data_source:
+          $ref: '#/components/schemas/DeFiDataSource'
+        execution_supported:
+          type: boolean
+          enum: [false]
+          description: Sempre false no MVP.
+        disclaimer:
+          type: string
+    SimulationResponse:
+      type: object
+      required: [simulation, meta]
+      properties:
+        simulation:
+          $ref: '#/components/schemas/Simulation'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    RecommendationInput:
+      type: object
+      required: [intent]
+      properties:
+        intent:
+          type: string
+          enum: [discover, compare, explain, next_step]
+        opportunity_ids:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        question:
+          type: string
+          maxLength: 2000
+        conversation_id:
+          type: string
+        channel:
+          $ref: '#/components/schemas/Channel'
+        consent:
+          $ref: '#/components/schemas/Consent'
+    RecommendationItem:
+      type: object
+      required: [opportunity_id, suitability, rationale, risks, disclaimer]
+      properties:
+        opportunity_id:
+          type: string
+        suitability:
+          type: string
+          enum: [aligned, caution, not_aligned, unavailable]
+        rationale:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
+        comparison:
+          type: string
+        disclaimer:
+          type: string
+    Recommendation:
+      type: object
+      required: [recommendation_id, status, profile_used, items, explanation, disclaimer]
+      properties:
+        recommendation_id:
+          type: string
+        status:
+          type: string
+          enum: [ready, no_match, fallback]
+        profile_used:
+          $ref: '#/components/schemas/RiskProfileLevel'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationItem'
+        explanation:
+          type: string
+        disclaimer:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        llm:
+          $ref: '#/components/schemas/LlmMetadata'
+    RecommendationResponse:
+      type: object
+      required: [recommendation, meta]
+      properties:
+        recommendation:
+          $ref: '#/components/schemas/Recommendation'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    ConversationCreateInput:
+      type: object
+      required: [channel, consent]
+      properties:
+        channel:
+          $ref: '#/components/schemas/Channel'
+        consent:
+          $ref: '#/components/schemas/Consent'
+        initial_message:
+          type: string
+          maxLength: 2000
+    Conversation:
+      type: object
+      required: [conversation_id, session, channel, status, messages]
+      properties:
+        conversation_id:
+          type: string
+        session:
+          $ref: '#/components/schemas/Session'
+        channel:
+          $ref: '#/components/schemas/ChannelContext'
+        status:
+          type: string
+          enum: [active, waiting_human, closed]
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageEnvelope'
+        last_activity_at:
+          type: string
+          format: date-time
+    ConversationResponse:
+      type: object
+      required: [conversation, meta]
+      properties:
+        conversation:
+          $ref: '#/components/schemas/Conversation'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    MessageInput:
+      type: object
+      required: [text, channel, consent]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        channel:
+          $ref: '#/components/schemas/Channel'
+        action:
+          type: string
+          nullable: true
+          enum: [ask_why, simulate, explain_risk, request_human]
+        consent:
+          $ref: '#/components/schemas/Consent'
+    MessageResponse:
+      type: object
+      required: [user_message, assistant_message, meta]
+      properties:
+        user_message:
+          $ref: '#/components/schemas/MessageEnvelope'
+        assistant_message:
+          $ref: '#/components/schemas/MessageEnvelope'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    MessageEnvelope:
+      type: object
+      required:
+        - envelope_version
+        - message_id
+        - message_type
+        - occurred_at
+        - request_id
+        - correlation_id
+        - identity
+        - session
+        - channel
+        - consent
+        - payload
+        - disclaimer
+        - audit
+      properties:
+        envelope_version:
+          type: string
+          pattern: '^[0-9]+\.[0-9]+$'
+          description: Versão do envelope, independente da versão da API.
+        message_id:
+          type: string
+        message_type:
+          type: string
+          enum: [user_message, assistant_message, system_event, alert]
+        occurred_at:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+        correlation_id:
+          type: string
+        identity:
+          $ref: '#/components/schemas/Identity'
+        session:
+          $ref: '#/components/schemas/Session'
+        channel:
+          $ref: '#/components/schemas/ChannelContext'
+        consent:
+          $ref: '#/components/schemas/Consent'
+        payload:
+          type: object
+          additionalProperties: true
+          description: Conteúdo específico do tipo de mensagem; não contém credenciais ou chaves.
+        disclaimer:
+          type: string
+        audit:
+          $ref: '#/components/schemas/AuditMetadata'
+    AuditMetadata:
+      type: object
+      required: [source, schema_version, redaction]
+      properties:
+        source:
+          type: string
+          description: Componente lógico que produziu o envelope.
+        schema_version:
+          type: string
+        trace_id:
+          type: string
+        actor:
+          type: string
+          enum: [user, hub, system, human_support]
+        redaction:
+          type: string
+          enum: [applied, not_required]
+        llm:
+          $ref: '#/components/schemas/LlmMetadata'
+        data_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeFiDataSource'
+    Alert:
+      type: object
+      required: [alert_id, type, title, message, status, created_at, disclaimer]
+      properties:
+        alert_id:
+          type: string
+        type:
+          type: string
+          enum: [apy_change, risk_change, new_opportunity, data_stale]
+        opportunity_id:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        status:
+          type: string
+          enum: [unread, read]
+        created_at:
+          type: string
+          format: date-time
+        observed_at:
+          type: string
+          format: date-time
+        data_source:
+          $ref: '#/components/schemas/DeFiDataSource'
+        suggested_action:
+          type: string
+          enum: [view_opportunity, simulate, ask_hub, none]
+        disclaimer:
+          type: string
+    AlertUpdateInput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [read]
+    AlertResponse:
+      type: object
+      required: [alert, meta]
+      properties:
+        alert:
+          $ref: '#/components/schemas/Alert'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    AlertListResponse:
+      type: object
+      required: [items, pagination, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'

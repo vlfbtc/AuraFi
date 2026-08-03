@@ -1,0 +1,274 @@
+version: 2
+
+models:
+  - name: stg_test_events
+    description: "Eventos sintéticos e rastreáveis usados para validar o DW do MVP; não contém PII real."
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: [recommendation, yield_observation, conversation_session]
+      - name: test_case_id
+        tests: [not_null]
+      - name: is_test_data
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+      - name: occurred_at
+        tests: [not_null]
+      - name: user_pseudo_id
+        tests: [not_null]
+      - name: channel_name
+        tests:
+          - not_null
+          - accepted_values:
+              values: [web_widget, ios_app, simulated]
+
+  - name: dim_tempo
+    description: "Dimensão horária adotada para o fixture; a granularidade definitiva permanece lacuna do contrato."
+    columns:
+      - name: time_key
+        tests: [not_null, unique]
+      - name: hour_at
+        tests: [not_null]
+
+  - name: dim_usuario
+    description: "Usuário analítico pseudonimizado em SCD Tipo 2."
+    columns:
+      - name: user_key
+        tests: [not_null, unique]
+      - name: user_pseudo_id
+        tests: [not_null]
+      - name: valid_from
+        tests: [not_null]
+      - name: is_current
+        tests: [not_null]
+
+  - name: dim_perfil_risco
+    description: "Versão do perfil de risco declarado; respostas brutas não entram no DW."
+    columns:
+      - name: risk_profile_key
+        tests: [not_null, unique]
+      - name: declared_profile
+        tests:
+          - not_null
+          - accepted_values:
+              values: [conservative, moderate, aggressive]
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: [declared, missing]
+      - name: version
+        tests: [not_null]
+
+  - name: dim_protocolo
+    description: "Identidade analítica do protocolo DeFi observado ou recomendado."
+    columns:
+      - name: protocol_key
+        tests: [not_null, unique]
+      - name: protocol_name
+        tests: [not_null, unique]
+
+  - name: dim_ativo
+    description: "Identidade analítica do ativo; não representa carteira ou saldo."
+    columns:
+      - name: asset_key
+        tests: [not_null, unique]
+      - name: asset_symbol
+        tests: [not_null, unique]
+
+  - name: dim_blockchain
+    description: "Identidade analítica da blockchain."
+    columns:
+      - name: blockchain_key
+        tests: [not_null, unique]
+      - name: blockchain_name
+        tests: [not_null, unique]
+
+  - name: dim_canal
+    description: "Canal lógico/adaptador do MVP, sem identidade externa."
+    columns:
+      - name: channel_key
+        tests: [not_null, unique]
+      - name: channel_name
+        tests:
+          - not_null
+          - unique
+          - accepted_values:
+              values: [web_widget, ios_app, simulated]
+      - name: adapter
+        tests: [not_null]
+      - name: simulated
+        tests: [not_null]
+
+  - name: fato_recomendacao
+    description: "Uma linha por recomendação emitida para usuário, canal e momento."
+    columns:
+      - name: recommendation_key
+        tests: [not_null, unique]
+      - name: recommendation_id
+        tests: [not_null, unique]
+      - name: time_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_tempo')
+              field: time_key
+      - name: user_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_usuario')
+              field: user_key
+      - name: risk_profile_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_perfil_risco')
+              field: risk_profile_key
+      - name: protocol_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_protocolo')
+              field: protocol_key
+      - name: asset_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_ativo')
+              field: asset_key
+      - name: blockchain_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_blockchain')
+              field: blockchain_key
+      - name: channel_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_canal')
+              field: channel_key
+      - name: decision_accepted
+        tests: [not_null]
+
+  - name: fato_yield_observacao
+    description: "Uma linha por snapshot de pool x protocolo x ativo x blockchain."
+    columns:
+      - name: yield_observation_key
+        tests: [not_null, unique]
+      - name: pool_name
+        tests: [not_null]
+      - name: time_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_tempo')
+              field: time_key
+      - name: protocol_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_protocolo')
+              field: protocol_key
+      - name: asset_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_ativo')
+              field: asset_key
+      - name: blockchain_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_blockchain')
+              field: blockchain_key
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: [defillama]
+      - name: mode
+        tests:
+          - not_null
+          - accepted_values:
+              values: [test, fallback]
+      - name: read_only
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+
+  - name: fato_interacao_conversacional
+    description: "Uma linha por sessão, com gap entre mensagens inferior a 30 minutos."
+    columns:
+      - name: conversation_key
+        tests: [not_null, unique]
+      - name: session_id
+        tests: [not_null, unique]
+      - name: time_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_tempo')
+              field: time_key
+      - name: user_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_usuario')
+              field: user_key
+      - name: risk_profile_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_perfil_risco')
+              field: risk_profile_key
+      - name: channel_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_canal')
+              field: channel_key
+      - name: continuity_flag
+        tests: [not_null]
+
+  - name: aura_star_schema
+    description: "Camada de consumo que une as três tabelas fato preservando seus grãos e chaves das sete dimensões."
+    columns:
+      - name: mart_row_key
+        tests: [not_null, unique]
+      - name: record_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: [recommendation, yield_observation, conversation_session]
+      - name: grain
+        tests: [not_null]
+      - name: time_key
+        tests: [not_null]
+      - name: channel_key
+        description: "Chave da dimensão de canal quando o fato possui vínculo comprovado; fica nula para snapshots de mercado."
+
+seeds:
+  - name: mvp_test_events
+    description: "Fixture sintética da jornada da Maria; todos os registros são explicitamente dados de teste."
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: is_test_data
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+      - name: source_system
+        tests:
+          - not_null
+          - accepted_values:
+              values: [synthetic_fixture]

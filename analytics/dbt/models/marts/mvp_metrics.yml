@@ -1,0 +1,83 @@
+version: 2
+
+models:
+  - name: mvp_metrics
+    description: >-
+      Métricas de aceitação, custo LLM, confiança, decisão, continuidade,
+      fallback, dados stale e cobertura da jornada do DW sintético do MVP.
+      Cada linha é uma métrica agregada e o modelo é somente leitura.
+      As referências respeitam os três fatos e as sete dimensões aprovados:
+      dim_tempo, dim_usuario, dim_perfil_risco, dim_protocolo, dim_ativo,
+      dim_blockchain e dim_canal.
+    columns:
+      - name: metric_key
+        description: "Chave determinística da métrica e de seus recortes dimensionais."
+        tests: [not_null, unique]
+      - name: metric_name
+        description: >-
+          Nome controlado da métrica: acceptance_rate,
+          llm_cost_per_recommendation, average_confidence,
+          average_time_to_decision, cross_channel_continuity_rate,
+          conversation_fallback_rate, stale_yield_observation_rate ou
+          journey_coverage_rate.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - acceptance_rate
+                - llm_cost_per_recommendation
+                - average_confidence
+                - average_time_to_decision
+                - cross_channel_continuity_rate
+                - conversation_fallback_rate
+                - stale_yield_observation_rate
+                - journey_coverage_rate
+      - name: metric_group
+        description: "Família analítica da métrica."
+        tests: [not_null]
+      - name: metric_grain
+        description: "Grão textual explícito da linha agregada."
+        tests: [not_null]
+      - name: metric_value
+        description: "Valor agregado na unidade indicada por metric_unit."
+        tests: [not_null]
+      - name: metric_unit
+        description: "Unidade do valor: ratio, usd_per_recommendation, confidence_score ou seconds."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [ratio, usd_per_recommendation, confidence_score, seconds]
+      - name: numerator
+        description: >-
+          Numerador ou soma usada na métrica; para médias, é a soma da medida
+          não nula e o denominador é a contagem correspondente.
+      - name: denominator
+        description: "Contagem de eventos/medidas não nulas usada no cálculo."
+      - name: calendar_date
+        description: "Dia UTC derivado de dim_tempo para permitir filtro temporal."
+        tests: [not_null]
+      - name: channel_key
+        description: "Chave de dim_canal quando a métrica é por canal; nula para métricas de fonte/jornada."
+      - name: channel_name
+        description: "Nome de dim_canal quando aplicável."
+      - name: previous_channel_key
+        description: "Chave do canal anterior em uma métrica de continuidade cross-channel."
+      - name: previous_channel_name
+        description: "Nome do canal anterior em uma métrica de continuidade cross-channel."
+      - name: risk_profile_key
+        description: "Chave de dim_perfil_risco quando a métrica é por perfil."
+      - name: declared_profile
+        description: "Perfil declarado de dim_perfil_risco quando aplicável."
+      - name: source
+        description: "Fonte do fato_yield_observacao quando a métrica é de frescor."
+      - name: mode
+        description: "Modo da observação de mercado quando a métrica é de frescor."
+      - name: source_fact
+        description: "Fato ou combinação de fatos que sustenta a métrica."
+        tests: [not_null]
+      - name: is_test_data
+        description: "Indicador preservado do DW; este modelo aceita apenas true."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
