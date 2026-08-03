@@ -59,6 +59,10 @@ class SQLiteRepository:
             self.database_path,
             timeout=timeout,
             isolation_level=None,
+            # The API uses ThreadingHTTPServer. Every connection access remains
+            # serialized by self._lock, so allowing the owning connection to be
+            # used by request threads is safe for this single-process adapter.
+            check_same_thread=False,
         )
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")

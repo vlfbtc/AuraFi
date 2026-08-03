@@ -2,10 +2,18 @@ import Foundation
 
 enum AuraFiConfiguration {
     static var apiBaseURL: URL? {
-        let configuredValue = ProcessInfo.processInfo.environment["AURAFI_API_BASE_URL"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "AURAFI_API_BASE_URL") as? String
+        resolveAPIBaseURL(
+            environmentValue: ProcessInfo.processInfo.environment["AURAFI_API_BASE_URL"],
+            bundleValue: Bundle.main.object(forInfoDictionaryKey: "AURAFI_API_BASE_URL") as? String
+        )
+    }
 
-        return validatedAPIBaseURL(from: configuredValue)
+    static func resolveAPIBaseURL(environmentValue: String?, bundleValue: String?) -> URL? {
+        let environmentValue = environmentValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let environmentValue, !environmentValue.isEmpty {
+            return validatedAPIBaseURL(from: environmentValue)
+        }
+        return validatedAPIBaseURL(from: bundleValue)
     }
 
     static func validatedAPIBaseURL(from configuredValue: String?) -> URL? {

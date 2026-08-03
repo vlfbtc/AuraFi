@@ -41,6 +41,7 @@ from services.identity import (
     ApiMeta,
     AuthenticationError,
     ChannelContext,
+    DeliveryError,
     IdentityService,
     IdentityServiceError,
     InMemoryAccountRepository,
@@ -681,7 +682,12 @@ class AuraFiApp:
         except ProhibitedOperationError as exc:
             return self._error_response(request, 400, exc.code, str(exc), retryable=False)
         except IdentityServiceError as exc:
-            status = 401 if isinstance(exc, AuthenticationError) else 400
+            if isinstance(exc, AuthenticationError):
+                status = 401
+            elif isinstance(exc, DeliveryError):
+                status = 503
+            else:
+                status = 400
             return self._error_from_domain(request, status, exc)
         except ConversationError as exc:
             status = 404 if isinstance(exc, ConversationNotFoundError) else 422

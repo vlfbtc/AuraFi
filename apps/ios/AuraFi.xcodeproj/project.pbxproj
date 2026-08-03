@@ -153,7 +153,7 @@
 		B10000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				AURAFI_API_BASE_URL = "http://127.0.0.1:8000";
+				AURAFI_API_BASE_URL = "https://aurafi-api.onrender.com";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_TESTABILITY = YES;
@@ -171,7 +171,7 @@
 		B10000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				AURAFI_API_BASE_URL = "";
+				AURAFI_API_BASE_URL = "https://aurafi-api.onrender.com";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Config/Info.plist;

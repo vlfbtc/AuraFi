@@ -37,4 +37,14 @@ final class AuraFiTests: XCTestCase {
             "https://api.aurafi.example"
         )
     }
+
+    func testEmptyEnvironmentOverrideFallsBackToBundledAPIURL() {
+        XCTAssertEqual(
+            AuraFiConfiguration.resolveAPIBaseURL(
+                environmentValue: "   ",
+                bundleValue: "https://aurafi-api.onrender.com"
+            )?.absoluteString,
+            "https://aurafi-api.onrender.com"
+        )
+    }
 }

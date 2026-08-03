@@ -105,10 +105,10 @@ não enviam o cabeçalho `Origin` e continuam compatíveis.
 
 O aplicativo exige iOS 17 ou superior. No macOS, abra
 `apps/ios/AuraFi.xcodeproj`, selecione o scheme `AuraFi` e um iPhone Simulator.
-O build Debug usa `http://127.0.0.1:8000` para acessar a API local. Para testar
-em um iPhone físico, altere `AURAFI_API_BASE_URL` nas Build Settings para uma URL
-HTTPS acessível pelo aparelho. O build Release não possui endpoint padrão e
-recusa HTTP e schemes não web.
+Os builds Debug e Release usam `https://aurafi-api.onrender.com` por padrão.
+Para desenvolvimento exclusivamente local, altere `AURAFI_API_BASE_URL` nas
+Build Settings para `http://127.0.0.1:8000`; HTTP continua aceito apenas para
+`localhost` e `127.0.0.1` em Debug.
 
 Para percorrer localmente a jornada de OTP no Simulator, use Python 3.11+ e
 inicie a API com um código fixo exclusivo de desenvolvimento:
@@ -180,8 +180,19 @@ o volume SQLite atual.
 
 O [render.yaml](render.yaml) provisiona esse perfil no Render com uma réplica,
 health check em `/health`, disco persistente em `/data` e geração automática do
-pepper. Durante a criação do Blueprint, o dashboard solicitará CORS, SMTP e a
-chave Anthropic; esses valores não são versionados. O disco requer um plano pago.
+pepper. O Blueprint já configura o SMTP do Resend em `smtp.resend.com:587`, com
+STARTTLS e usuário `resend`. No dashboard, informe:
+
+- `AURAFI_OTP_SMTP_PASSWORD`: a chave Resend completa iniciada por `re_`;
+- `AURAFI_OTP_FROM_EMAIL`: `onboarding@resend.dev` durante o primeiro teste,
+  limitado ao e-mail da própria conta Resend; depois que `aurafi.com.br` estiver
+  verificado, use por exemplo `nao-responder@aurafi.com.br`;
+- `AURAFI_ALLOWED_ORIGINS`: somente as origens HTTPS do Web Widget, separadas por
+  vírgula; o aplicativo iOS não depende de CORS;
+- `AURAFI_ANTHROPIC_API_KEY`: a chave do provider conversacional.
+
+Depois de salvar as variáveis, faça um deploy/restart do serviço. Os segredos não
+são versionados. O disco persistente requer um plano pago.
 
 Se o comando `python3` não existir depois da instalação, feche e reabra o
 Terminal para atualizar o `PATH`. No segundo terminal não é necessário ativar o

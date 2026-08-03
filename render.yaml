@@ -27,7 +27,7 @@ services:
       - key: AURAFI_OTP_PROVIDER
         value: smtp
       - key: AURAFI_OTP_SMTP_HOST
-        sync: false
+        value: smtp.resend.com
       - key: AURAFI_OTP_SMTP_PORT
         value: "587"
       - key: AURAFI_OTP_SMTP_STARTTLS
@@ -37,7 +37,7 @@ services:
       - key: AURAFI_OTP_FROM_EMAIL
         sync: false
       - key: AURAFI_OTP_SMTP_USERNAME
-        sync: false
+        value: resend
       - key: AURAFI_OTP_SMTP_PASSWORD
         sync: false
       - key: AURAFI_OTP_HMAC_PEPPER

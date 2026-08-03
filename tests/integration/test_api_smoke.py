@@ -117,6 +117,63 @@ class ApiSmokeTests(unittest.TestCase):
         def deliver(self, message: OtpDeliveryMessage) -> None:
             self.deliveries.append(message)
 
+    class FailingOtpDelivery:
+        def deliver(self, message: OtpDeliveryMessage) -> None:
+            del message
+            raise RuntimeError("simulated provider outage")
+
+    def test_otp_delivery_failure_is_reported_as_retryable_503(self) -> None:
+        app = create_app(
+            otp_delivery=self.FailingOtpDelivery(),
+            llm=DeterministicMockLlm(),
+        )
+        response = app.handle(
+            Request(
+                method="POST",
+                target="/v1/auth/otp/request",
+                headers={},
+                body={"email": "maria@example.com", "channel": "ios_app"},
+                source_ip="203.0.113.20",
+            )
+        )
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.payload["error"]["code"], "OTP_DELIVERY_UNAVAILABLE")
+        self.assertTrue(response.payload["error"]["retryable"])
+
+    def test_sqlite_otp_request_works_through_threaded_http_server(self) -> None:
+        delivery = self.FakeOtpDelivery()
+        environment = self.production_env(
+            AURAFI_ENV="production",
+            AURAFI_ALLOWED_ORIGINS="https://app.aurafi.example",
+        )
+        with patch.dict(os.environ, environment, clear=False):
+            app = create_app(otp_delivery=delivery, llm=DeterministicMockLlm())
+            server = create_server(app, port=0)
+
+        server.start_background(name="aurafi-sqlite-thread-test")
+        connection = HTTPConnection(*server.address, timeout=3)
+        try:
+            body = json.dumps(
+                {"email": "maria@example.com", "channel": "ios_app"}
+            ).encode("utf-8")
+            connection.request(
+                "POST",
+                "/v1/auth/otp/request",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+            server.shutdown()
+            app.close()
+
+        self.assertEqual(response.status, 202)
+        self.assertEqual(payload["delivery"], "email")
+        self.assertEqual(len(delivery.deliveries), 1)
+
     def test_health_auth_profile_market_simulation_conversation(self) -> None:
         status, health = self.request("GET", "/health")
         self.assertEqual(status, 200)
