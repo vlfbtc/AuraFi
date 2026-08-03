@@ -14,7 +14,7 @@ AuraFi é uma plataforma de apoio à decisão para pessoas que desejam entender 
 ## Requisitos
 
 - Python 3.11 ou superior;
-- Node.js 18 ou superior e npm;
+- Node.js 20.19+ na linha 20 LTS, ou Node.js 22.12+ e npm;
 - navegador moderno.
 
 A API atual usa somente a biblioteca padrão do Python. O Web Widget instala as dependências pelo `package-lock.json`. DeFiLlama é consultado em modo somente leitura quando a rede é habilitada.
@@ -29,6 +29,7 @@ Terminal 1 — API:
 Set-Location "C:\caminho\para\AuraFi"
 $env:AURAFI_ENABLE_MARKET_NETWORK = "true"
 $env:AURAFI_MARKET_MODE = "live"
+$env:AURAFI_ALLOWED_ORIGINS = "http://127.0.0.1:5173"
 python -m services.api.cli --host 127.0.0.1 --port 8000
 ```
 
@@ -72,6 +73,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 export AURAFI_ENABLE_MARKET_NETWORK=true
 export AURAFI_MARKET_MODE=live
+export AURAFI_ALLOWED_ORIGINS=http://127.0.0.1:5173
 python3 -m services.api.cli --host 127.0.0.1 --port 8000
 ```
 
@@ -93,6 +95,93 @@ curl http://127.0.0.1:8000/health
 ```
 
 Depois abra `http://127.0.0.1:5173` no navegador. Dados de demonstração são opt-in e não devem ser habilitados no ambiente publicado.
+
+`AURAFI_ALLOWED_ORIGINS` aceita uma lista separada por vírgulas de origens HTTP(S)
+explícitas. Configure nela somente os domínios publicados do Web Widget; curingas
+(`*`) são recusados e a variável é obrigatória em produção. Clientes sem contexto de navegador, como o aplicativo iOS,
+não enviam o cabeçalho `Origin` e continuam compatíveis.
+
+## Aplicativo iOS no Xcode
+
+O aplicativo exige iOS 17 ou superior. No macOS, abra
+`apps/ios/AuraFi.xcodeproj`, selecione o scheme `AuraFi` e um iPhone Simulator.
+O build Debug usa `http://127.0.0.1:8000` para acessar a API local. Para testar
+em um iPhone físico, altere `AURAFI_API_BASE_URL` nas Build Settings para uma URL
+HTTPS acessível pelo aparelho. O build Release não possui endpoint padrão e
+recusa HTTP e schemes não web.
+
+Para percorrer localmente a jornada de OTP no Simulator, use Python 3.11+ e
+inicie a API com um código fixo exclusivo de desenvolvimento:
+
+```bash
+export AURAFI_DEV_OTP_CODE=123456
+python3 -m services.api.cli --host 127.0.0.1 --port 8000
+```
+
+No aplicativo, solicite o acesso com um e-mail de teste e informe `123456`.
+`AURAFI_DEV_OTP_CODE` é ignorado em produção e não deve ser configurado em um
+ambiente publicado.
+
+Validação por linha de comando, sem assinatura:
+
+```bash
+cd apps/ios
+xcodebuild build \
+  -project AuraFi.xcodeproj \
+  -scheme AuraFi \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/aurafi-derived-data \
+  CODE_SIGNING_ALLOWED=NO
+
+xcodebuild test \
+  -project AuraFi.xcodeproj \
+  -scheme AuraFi \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -derivedDataPath /tmp/aurafi-derived-data-tests \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+O nome do simulador pode variar conforme os runtimes instalados no Xcode.
+
+## Servidor com integrações reais
+
+O `Dockerfile` empacota a API para uma plataforma de containers e escuta em
+`0.0.0.0:$PORT` (ou `8000` quando a plataforma não injeta `PORT`). Em um ambiente publicado, coloque o container atrás do HTTPS e
+do balanceador/reverse proxy gerenciado da plataforma; não exponha a porta HTTP
+diretamente à internet. Use [.env.example](.env.example) somente como catálogo
+de configuração e injete os valores reais pelo secret manager.
+
+O perfil de produção exige:
+
+- SMTP com TLS para entrega do OTP;
+- pepper HMAC estável e aleatório em `AURAFI_OTP_HMAC_PEPPER`;
+- `AURAFI_ALLOW_SELF_SIGNUP=true` quando novos e-mails puderem criar conta;
+- DeFiLlama em `https://yields.llama.fi/pools`, somente leitura;
+- `AURAFI_LLM_PROVIDER=anthropic` e chave do provider para a conversa Aura;
+- origens HTTPS explícitas em `AURAFI_ALLOWED_ORIGINS`;
+- volume persistente em `/data` enquanto o adapter SQLite de instância única for usado.
+
+Exemplo de build, sem incorporar `.env` ou segredos na imagem:
+
+```bash
+docker build -t aurafi-api:local .
+docker run --rm --env-file .env -p 8000:8000 -v aurafi-data:/data aurafi-api:local
+```
+
+Para um domínio real, configure a plataforma para encaminhar HTTPS ao container,
+publique por exemplo `https://api.seu-dominio.example` e use essa URL em
+`VITE_API_BASE_URL` e `AURAFI_API_BASE_URL` do iOS Release. SMTP requer domínio
+de remetente validado e SPF/DKIM/DMARC configurados no provedor.
+
+O SQLite é adequado apenas para uma única instância controlada. Escala horizontal,
+alta disponibilidade e continuidade conversacional entre réplicas ainda exigem
+um adapter PostgreSQL e cache compartilhado; não execute múltiplas réplicas com
+o volume SQLite atual.
+
+O [render.yaml](render.yaml) provisiona esse perfil no Render com uma réplica,
+health check em `/health`, disco persistente em `/data` e geração automática do
+pepper. Durante a criação do Blueprint, o dashboard solicitará CORS, SMTP e a
+chave Anthropic; esses valores não são versionados. O disco requer um plano pago.
 
 Se o comando `python3` não existir depois da instalação, feche e reabra o
 Terminal para atualizar o `PATH`. No segundo terminal não é necessário ativar o

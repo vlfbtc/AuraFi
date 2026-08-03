@@ -738,6 +738,7 @@ class ConversationService:
             channel_identity_id=channel_identity_id,
         )
         self._authorize(conversation, resolved)
+        _require_same_consent(conversation.consent, message_request.consent)
         _require_consent(message_request.consent)
         updated, response = self._append_message(conversation, resolved, message_request, now=self._now())
         self._repository.update(updated)
@@ -847,6 +848,8 @@ class ConversationService:
         try:
             raw_result = self._call_llm(llm_request)
             result = raw_result if isinstance(raw_result, LlmResult) else LlmResult(str(raw_result), prompt_version=self._prompt_version)
+            if result.mode == "provider":
+                _validate_provider_output(result.text)
             text = _sanitize(result.text)
             metadata = LlmMetadata(
                 mode=result.mode,
@@ -1105,6 +1108,20 @@ def _require_consent(consent: Consent) -> None:
         raise ConversationConsentError()
 
 
+def _require_same_consent(authoritative: Consent, presented: Consent) -> None:
+    """Impede que o payload da mensagem altere a decisão persistida da conversa."""
+
+    comparable = lambda value: (
+        value.purpose,
+        value.status,
+        value.policy_version,
+        value.memory,
+        value.analytics,
+    )
+    if comparable(authoritative) != comparable(presented):
+        raise ConversationConsentError()
+
+
 def _resolved_channel(
     resolved: ResolvedIdentity,
     requested: ChannelContext | ChannelName | str | None,
@@ -1147,6 +1164,20 @@ _GUARANTEE_PATTERNS = (
     (r"\b(vai|irá|ira)\s+(render|lucrar|valorizar)\b", "pode ter resultado diferente do esperado"),
     (r"\bcerteza\s+de\s+(retorno|lucro|ganho)\b", r"possibilidade de \1"),
 )
+
+_UNSAFE_PROVIDER_OUTPUT = tuple(
+    re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    for pattern in (
+        r"\b(envie|informe|compartilhe|digite|provide|send|share)\b.{0,80}\b(seed phrase|frase semente|chave privada|private key|senha|password|otp|access token)\b",
+        r"\b(transfira|deposite|assine a transa[cç][aã]o|conecte sua carteira|transfer funds|sign the transaction|connect your wallet)\b",
+        r"\b0x[a-f0-9]{40}\b",
+    )
+)
+
+
+def _validate_provider_output(text: str) -> None:
+    if any(pattern.search(text) for pattern in _UNSAFE_PROVIDER_OUTPUT):
+        raise ValueError("unsafe provider output")
 
 
 def _sanitize(text: str) -> str:

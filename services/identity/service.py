@@ -380,6 +380,8 @@ class DeliveryError(IdentityServiceError):
 
 
 class AccountRepository(Protocol):
+    def create(self, account: Account) -> Account: ...
+
     def find_by_email(self, email: str) -> Account | None: ...
 
     def get(self, account_id: str) -> Account | None: ...
@@ -495,6 +497,10 @@ class InMemoryAccountRepository:
                 raise ValueError("Email already exists")
             self._accounts[account.account_id] = account
             self._email_index[account.email] = account.account_id
+
+    def create(self, account: Account) -> Account:
+        self.add(account)
+        return account
 
     def find_by_email(self, email: str) -> Account | None:
         normalized = normalize_email(email)
@@ -653,6 +659,7 @@ class IdentityService:
         otp_ttl: timedelta = DEFAULT_OTP_TTL,
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
         max_otp_attempts: int = DEFAULT_MAX_OTP_ATTEMPTS,
+        allow_self_signup: bool = False,
     ) -> None:
         if delivery_mode not in {"email", "mock"}:
             raise ValueError("Unsupported OTP delivery mode")
@@ -675,6 +682,7 @@ class IdentityService:
         self._otp_ttl = otp_ttl
         self._session_ttl = session_ttl
         self._max_otp_attempts = max_otp_attempts
+        self._allow_self_signup = allow_self_signup
         self._verification_lock = threading.RLock()
 
     def request_otp(
@@ -689,6 +697,10 @@ class IdentityService:
         normalized_email = normalize_email(email)
         channel_context = ChannelContext.from_value(channel)
         account = self._accounts.find_by_email(normalized_email)
+        if account is None and self._allow_self_signup:
+            account = self._accounts.create(
+                Account(account_id=self._id_generator("acc"), email=normalized_email)
+            )
         now = context.generated_at
         challenge_id = self._id_generator("chl")
         otp = self._otp_generator.generate()

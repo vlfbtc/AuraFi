@@ -14,8 +14,9 @@ struct AuraFiApp: App {
 
 enum AppFlow {
     case welcome
+    case login
     case otp
-    case declaredProfile
+    case riskQuiz
     case dashboard
 }
 
@@ -107,11 +108,11 @@ final class AppModel: ObservableObject {
                 otp: otpCode.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             self.session = authenticatedSession
-            self.flow = .declaredProfile
+            self.flow = .riskQuiz
         }
     }
 
-    func declare(profile: RiskProfile) async {
+    func declare(profile: RiskProfile, answers: [APIAnswer]) async {
         guard let session else {
             errorMessage = "Confirme seu acesso antes de declarar um perfil."
             flow = .welcome
@@ -119,7 +120,11 @@ final class AppModel: ObservableObject {
         }
 
         await perform { [self] in
-            _ = try await apiClient.setRiskProfile(sessionToken: session.accessToken, profile: profile)
+            _ = try await apiClient.setRiskProfile(
+                sessionToken: session.accessToken,
+                profile: profile,
+                answers: answers
+            )
             self.declaredProfile = profile
             self.flow = .dashboard
         }
@@ -209,13 +214,35 @@ struct RootView: View {
     var body: some View {
         Group {
             switch appModel.flow {
-            case .welcome, .otp, .declaredProfile:
+            case .welcome, .login, .otp, .riskQuiz:
                 OnboardingView()
             case .dashboard:
                 DashboardView()
             }
         }
-        .tint(.indigo)
+        .tint(AuraTheme.pink)
+        .preferredColorScheme(.light)
+    }
+}
+
+enum AuraTheme {
+    static let pink = Color(red: 0.82, green: 0.08, blue: 0.40)
+    static let pinkBright = Color(red: 0.94, green: 0.20, blue: 0.55)
+    static let purple = Color(red: 0.09, green: 0.03, blue: 0.16)
+    static let purpleSoft = Color(red: 0.20, green: 0.07, blue: 0.30)
+    static let lavender = Color(red: 0.98, green: 0.96, blue: 1.00)
+    static let border = Color(red: 0.82, green: 0.76, blue: 0.88)
+    static let success = Color(red: 0.00, green: 0.62, blue: 0.29)
+}
+
+struct AuraPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .background(AuraTheme.pink.opacity(configuration.isPressed ? 0.78 : 1), in: Capsule())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }
 }
 
@@ -289,6 +316,7 @@ enum PreviewData {
         mode: "live",
         observedAt: "2026-08-02T10:00:00-03:00",
         retrievedAt: "2026-08-02T10:00:05-03:00",
+        cacheExpiresAt: nil,
         readOnly: true,
         isStale: false,
         freshnessNote: nil

@@ -7,23 +7,34 @@ roteamento e a composicao dos servicos de dominio, deixando o transporte
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
+from math import ceil
 import os
 from threading import RLock
+from time import monotonic
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from database.local.repository import SQLiteRepository, create_repository
 from services.conversation import (
+    AuditMetadata,
+    AnthropicLlm,
     Consent,
     ConversationCreateRequest,
     ConversationError,
     ConversationInputError,
     ConversationNotFoundError,
+    ConversationRecord,
     ConversationService,
+    DeterministicMockLlm,
+    LlmPort,
+    MessageEnvelope,
     MessageRequest,
+    SessionSnapshot,
 )
 from services.identity import (
     Account,
@@ -43,7 +54,7 @@ from services.identity import (
 )
 from services.identity import otp_delivery as otp_delivery_module
 from services.identity.otp_delivery import OtpDeliveryConfigurationError
-from services.identity.service import OtpDeliveryPort
+from services.identity.service import HmacOtpHasher, OtpDeliveryPort
 from services.identity.service import RequestContext
 from services.market_data import DeFiLlamaAdapter, MarketDataError
 from services.recommendation import (
@@ -123,7 +134,25 @@ def create_otp_delivery_from_env(
         raise OtpDeliveryConfigurationError(
             "AURAFI_OTP_PROVIDER must be configured as smtp"
         )
-    return SmtpOtpDelivery.from_env(values)
+    return otp_delivery_module.SmtpOtpDelivery.from_env(values)
+
+
+def create_llm_from_env(
+    env: Mapping[str, str] | None = None,
+    *,
+    is_production: bool = False,
+) -> LlmPort:
+    """Resolve o provider do hub; produção nunca cai silenciosamente em mock."""
+
+    values = os.environ if env is None else env
+    provider = values.get("AURAFI_LLM_PROVIDER", "").strip().casefold()
+    if provider in {"anthropic", "claude"}:
+        return AnthropicLlm.from_env(values)
+    if not provider and not is_production:
+        return DeterministicMockLlm()
+    if not provider:
+        raise ValueError("AURAFI_LLM_PROVIDER is required in production")
+    raise ValueError("AURAFI_LLM_PROVIDER must be configured as anthropic")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +163,7 @@ class Request:
     body: Any = None
     provided_request_id: str | None = None
     provided_correlation_id: str | None = None
+    source_ip: str | None = None
 
     @property
     def path(self) -> str:
@@ -160,6 +190,33 @@ class Response:
     headers: Mapping[str, str] | None = None
 
 
+class RateLimitExceeded(RuntimeError):
+    """Sinaliza throttling sem incluir identidade, token ou conteúdo no erro."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("Limite temporário de requisições excedido.")
+        self.retry_after = max(1, retry_after)
+
+
+class _RateLimiter:
+    """Sliding window local; adequado ao deploy suportado de uma réplica."""
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str, *, limit: int, window_seconds: int) -> None:
+        now = monotonic()
+        cutoff = now - window_seconds
+        with self._lock:
+            events = self._events[key]
+            while events and events[0] <= cutoff:
+                events.popleft()
+            if len(events) >= limit:
+                raise RateLimitExceeded(ceil(events[0] + window_seconds - now))
+            events.append(now)
+
+
 def _parse_persisted_timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):
         parsed = value
@@ -175,6 +232,9 @@ class _SQLiteAccountRepository:
 
     def __init__(self, repository: SQLiteRepository) -> None:
         self._repository = repository
+
+    def create(self, account: Account) -> Account:
+        return self._account(self._repository.save_account(account.to_dict())) or account
 
     @staticmethod
     def _account(row: Mapping[str, Any] | None) -> Account | None:
@@ -212,6 +272,7 @@ class _SQLiteOtpChallengeRepository:
                 "delivery": challenge.delivery,
                 "otp_digest": challenge.otp_digest,
                 "status": challenge.status,
+                "attempts": challenge.attempts,
                 "expires_at": challenge.expires_at,
                 "created_at": challenge.created_at,
                 "verified_at": challenge.verified_at,
@@ -233,6 +294,7 @@ class _SQLiteOtpChallengeRepository:
             created_at=_parse_persisted_timestamp(row["created_at"]),
             account_id=str(account["account_id"]) if account else None,
             status=str(row["status"]),  # type: ignore[arg-type]
+            attempts=int(row.get("attempts", 0)),
             verified_at=(
                 _parse_persisted_timestamp(row["verified_at"])
                 if row.get("verified_at")
@@ -245,6 +307,7 @@ class _SQLiteOtpChallengeRepository:
             challenge.challenge_id,
             status=challenge.status,
             verified_at=challenge.verified_at,
+            attempts=challenge.attempts,
         )
 
 
@@ -309,6 +372,112 @@ class _SQLiteSessionRepository:
         )
 
 
+class _SQLiteConversationRepository:
+    """Persiste o agregado conversacional sem e-mail, token ou OTP."""
+
+    def __init__(self, repository: SQLiteRepository) -> None:
+        self._repository = repository
+
+    @staticmethod
+    def _state(conversation: ConversationRecord) -> dict[str, Any]:
+        return {
+            "conversation_id": conversation.conversation_id,
+            "account_id": conversation.account_id,
+            "session": conversation.session.to_dict(),
+            "identity": dict(conversation.identity),
+            "channel": conversation.channel.to_dict(),
+            "consent": conversation.consent.to_dict(),
+            "correlation_id": conversation.correlation_id,
+            "status": conversation.status,
+            "messages": [message.to_dict() for message in conversation.messages],
+            "last_activity_at": conversation.last_activity_at.isoformat(),
+        }
+
+    @staticmethod
+    def _channel(value: Mapping[str, Any]) -> ChannelContext:
+        return ChannelContext(
+            name=str(value["name"]),  # type: ignore[arg-type]
+            adapter=str(value["adapter"]),
+            external_message_id=(
+                str(value["external_message_id"])
+                if value.get("external_message_id") is not None
+                else None
+            ),
+            simulated=bool(value.get("simulated", False)),
+        )
+
+    @classmethod
+    def _session(cls, value: Mapping[str, Any]) -> SessionSnapshot:
+        return SessionSnapshot(
+            session_id=str(value["session_id"]),
+            started_at=_parse_persisted_timestamp(value["started_at"]),
+            expires_at=_parse_persisted_timestamp(value["expires_at"]),
+        )
+
+    @classmethod
+    def _message(cls, value: Mapping[str, Any]) -> MessageEnvelope:
+        audit = value["audit"]
+        return MessageEnvelope(
+            envelope_version=str(value["envelope_version"]),
+            message_id=str(value["message_id"]),
+            message_type=str(value["message_type"]),  # type: ignore[arg-type]
+            occurred_at=_parse_persisted_timestamp(value["occurred_at"]),
+            request_id=str(value["request_id"]),
+            correlation_id=str(value["correlation_id"]),
+            identity=dict(value["identity"]),
+            session=cls._session(value["session"]),
+            channel=cls._channel(value["channel"]),
+            consent=Consent.from_mapping(value["consent"]),
+            payload=dict(value["payload"]),
+            disclaimer=str(value["disclaimer"]),
+            audit=AuditMetadata(
+                source=str(audit["source"]),
+                actor=str(audit["actor"]),  # type: ignore[arg-type]
+                trace_id=str(audit["trace_id"]),
+                redaction=str(audit.get("redaction", "applied")),  # type: ignore[arg-type]
+                llm=dict(audit.get("llm", {})),
+                data_sources=tuple(audit.get("data_sources", ())),
+                schema_version=str(audit.get("schema_version", "1.0")),
+            ),
+        )
+
+    @classmethod
+    def _conversation(cls, state: Mapping[str, Any] | None) -> ConversationRecord | None:
+        if state is None:
+            return None
+        return ConversationRecord(
+            conversation_id=str(state["conversation_id"]),
+            account_id=str(state["account_id"]),
+            session=cls._session(state["session"]),
+            identity=dict(state["identity"]),
+            channel=cls._channel(state["channel"]),
+            consent=Consent.from_mapping(state["consent"]),
+            correlation_id=str(state["correlation_id"]),
+            status=str(state.get("status", "active")),  # type: ignore[arg-type]
+            messages=tuple(cls._message(item) for item in state.get("messages", ())),
+            last_activity_at=_parse_persisted_timestamp(state["last_activity_at"]),
+        )
+
+    def save(self, conversation: ConversationRecord) -> None:
+        self._repository.save_conversation_runtime_state(
+            conversation.conversation_id,
+            conversation.account_id,
+            self._state(conversation),
+        )
+
+    def get(self, conversation_id: str) -> ConversationRecord | None:
+        return self._conversation(
+            self._repository.get_conversation_runtime_state(conversation_id)
+        )
+
+    def update(self, conversation: ConversationRecord) -> None:
+        self._repository.update_conversation_runtime_state(
+            conversation.conversation_id,
+            conversation.account_id,
+            self._state(conversation),
+        )
+
+
 class AuraFiApp:
     """Composicao local e testavel dos servicos do MVP."""
 
@@ -320,20 +489,26 @@ class AuraFiApp:
         account: Account | None = None,
         market_mode: str | None = None,
         otp_delivery: OtpDeliveryPort | None = None,
+        llm: LlmPort | None = None,
     ) -> None:
         self.version = version
         self.environment = _environment_name(os.environ.get("AURAFI_ENV"))
         self.is_production = self.environment in PRODUCTION_ENVIRONMENTS
         self._lock = RLock()
+        self._rate_limiter = _RateLimiter()
+        self._otp_request_limit = _env_positive_int("AURAFI_OTP_REQUEST_LIMIT", 5)
+        self._otp_verify_limit = _env_positive_int("AURAFI_OTP_VERIFY_LIMIT", 10)
+        self._llm_request_limit = _env_positive_int("AURAFI_LLM_REQUEST_LIMIT", 30)
         self._profiles: dict[str, RiskProfile] = {}
         self._alerts: dict[str, list[dict[str, Any]]] = {}
         dev_otp = os.environ.get("AURAFI_DEV_OTP_CODE")
         otp_generator = FixedOtpGenerator(dev_otp) if dev_otp and not self.is_production else None
 
         initial_account = account or Account("acc_maria", "maria@example.com")
-        self.persistence: SQLiteRepository | None = create_repository(
-            os.environ.get("AURAFI_DB_PATH")
-        )
+        database_path = os.environ.get("AURAFI_DB_PATH", "").strip()
+        if self.is_production and (not database_path or database_path == ":memory:"):
+            raise ValueError("AURAFI_DB_PATH persistente é obrigatório em produção")
+        self.persistence: SQLiteRepository | None = create_repository(database_path or None)
         if self.persistence is None:
             self.account_repository = InMemoryAccountRepository([initial_account])
             self._challenges = InMemoryOtpChallengeRepository()
@@ -361,6 +536,12 @@ class AuraFiApp:
             delivery = InMemoryOtpSink(capture_secrets=capture_test_secrets)
             delivery_mode = "mock"
         self.otp_sink = delivery if isinstance(delivery, InMemoryOtpSink) else None
+        self.identity_delivery_mode = delivery_mode
+        otp_pepper = os.environ.get("AURAFI_OTP_HMAC_PEPPER", "").strip()
+        if self.is_production and len(otp_pepper.encode("utf-8")) < 32:
+            raise ValueError(
+                "AURAFI_OTP_HMAC_PEPPER deve ter pelo menos 32 bytes em produção"
+            )
         self.identity = IdentityService(
             accounts=self.account_repository,
             challenges=self._challenges,
@@ -369,6 +550,10 @@ class AuraFiApp:
             otp_delivery=delivery,
             delivery_mode=delivery_mode,
             otp_generator=otp_generator,
+            otp_hasher=(
+                HmacOtpHasher(otp_pepper.encode("utf-8")) if otp_pepper else None
+            ),
+            allow_self_signup=_env_flag("AURAFI_ALLOW_SELF_SIGNUP"),
         )
         network_enabled = _env_flag("AURAFI_ENABLE_MARKET_NETWORK")
         configured_market_mode = market_mode
@@ -382,6 +567,8 @@ class AuraFiApp:
         self.market = self._build_market_adapter()
         self.simulation = SimulationService(AssumptionFixtureFormula())
         self.recommendation = RecommendationService(disclaimer=DISCLAIMER)
+        self.llm = llm or create_llm_from_env(is_production=self.is_production)
+        self.llm_mode = "provider" if isinstance(self.llm, AnthropicLlm) else "mock"
         self.conversation = ConversationService(
             identity=self.identity,
             recommendation=self.recommendation,
@@ -389,6 +576,12 @@ class AuraFiApp:
             profile_port=self._get_profile,
             policy_port=lambda account_id: None,
             market_data_port=self.market,
+            llm=self.llm,
+            repository=(
+                _SQLiteConversationRepository(self.persistence)
+                if self.persistence is not None
+                else None
+            ),
             disclaimer=DISCLAIMER,
         )
         self.simulated_channel = SimulatedChannelAdapter(self.conversation)
@@ -415,6 +608,21 @@ class AuraFiApp:
             if allow_network
             else None
         )
+        if allow_network:
+            parsed = urlsplit(str(base_url))
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "yields.llama.fi"
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "AURAFI_MARKET_BASE_URL must use HTTPS on yields.llama.fi"
+                )
+            if endpoint != "/pools":
+                raise ValueError("AURAFI_MARKET_ENDPOINT must be /pools")
         return DeFiLlamaAdapter(base_url=base_url, endpoint=endpoint)
 
     def handle(self, request: Request) -> Response:
@@ -461,6 +669,15 @@ class AuraFiApp:
                 "Recurso nao encontrado.",
                 retryable=False,
             )
+        except RateLimitExceeded as exc:
+            response = self._error_response(
+                request,
+                429,
+                "RATE_LIMITED",
+                "Muitas tentativas. Aguarde antes de tentar novamente.",
+                retryable=True,
+            )
+            return Response(response.status, response.payload, {"Retry-After": str(exc.retry_after)})
         except ProhibitedOperationError as exc:
             return self._error_response(request, 400, exc.code, str(exc), retryable=False)
         except IdentityServiceError as exc:
@@ -513,10 +730,10 @@ class AuraFiApp:
             "status": "ok",
             "version": self.version,
             "checks": {
-                "identity": "ok",
+                "identity": self.identity_delivery_mode,
                 "persistence": "sqlite" if self.persistence is not None else "memory",
-                "market_data": "ok",
-                "llm": "ok",
+                "market_data": self.market_mode,
+                "llm": self.llm_mode,
             },
             "meta": meta.to_dict(),
         }
@@ -524,6 +741,16 @@ class AuraFiApp:
 
     def _otp_request(self, request: Request) -> Response:
         payload = _object_body(request)
+        source = request.source_ip or "unknown"
+        email_digest = sha256(
+            str(payload.get("email", "")).strip().casefold().encode("utf-8")
+        ).hexdigest()
+        for key in (f"otp-request:ip:{source}", f"otp-request:email:{email_digest}"):
+            self._rate_limiter.check(
+                key,
+                limit=self._otp_request_limit,
+                window_seconds=900,
+            )
         channel = _channel(payload.get("channel"))
         result = self.identity.request_otp(
             payload.get("email"),
@@ -535,6 +762,16 @@ class AuraFiApp:
 
     def _otp_verify(self, request: Request) -> Response:
         payload = _object_body(request)
+        source = request.source_ip or "unknown"
+        challenge_digest = sha256(
+            str(payload.get("challenge_id", "")).encode("utf-8")
+        ).hexdigest()
+        for key in (f"otp-verify:ip:{source}", f"otp-verify:challenge:{challenge_digest}"):
+            self._rate_limiter.check(
+                key,
+                limit=self._otp_verify_limit,
+                window_seconds=900,
+            )
         result = self.identity.verify_otp(
             payload.get("challenge_id"),
             payload.get("otp"),
@@ -717,6 +954,12 @@ class AuraFiApp:
 
     def _conversation_message(self, request: Request, conversation_id: str) -> Response:
         token = self._bearer(request)
+        principal = sha256(token.encode("utf-8")).hexdigest()
+        self._rate_limiter.check(
+            f"llm:principal:{principal}",
+            limit=self._llm_request_limit,
+            window_seconds=3600,
+        )
         data = _object_body(request)
         message = MessageRequest.from_mapping(data, default_channel=data.get("channel"))
         correlation_id = request.provided_correlation_id
@@ -906,6 +1149,16 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes"}
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"{name} deve ser um inteiro positivo")
+    return value
+
+
 def _environment_name(value: str | None) -> str:
     """Normaliza o ambiente e falha fechado para valores desconhecidos."""
 
@@ -948,6 +1201,7 @@ def _ensure_request_context(request: Request) -> Request:
             request.body,
             provided_request_id,
             provided_correlation_id,
+            request.source_ip,
         )
     context = RequestContext.create(request.request_id, request.correlation_id, now=utc_now())
     headers = dict(request.headers)
@@ -960,6 +1214,7 @@ def _ensure_request_context(request: Request) -> Request:
         request.body,
         provided_request_id,
         provided_correlation_id,
+        request.source_ip,
     )
 
 

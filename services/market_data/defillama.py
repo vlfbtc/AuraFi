@@ -13,7 +13,7 @@ import json
 from numbers import Real
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 from urllib.parse import urljoin
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 
@@ -200,13 +200,34 @@ class DeFiLlamaSchema:
     )
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        raise MarketDataError("Redirecionamentos da DeFiLlama não são permitidos")
+
+
 class UrllibHttpClient:
     """Implementação padrão da porta HTTP, restrita a requisições GET."""
 
+    def __init__(self, *, max_response_bytes: int = 16_777_216) -> None:
+        if max_response_bytes <= 0:
+            raise ValueError("max_response_bytes deve ser maior que zero")
+        self.max_response_bytes = max_response_bytes
+        self._open = build_opener(_RejectRedirects()).open
+
     def get(self, url: str, *, timeout_seconds: float) -> JsonPayload:
-        request = Request(url, headers={"Accept": "application/json"}, method="GET")
-        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
+        request = Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "AuraFi/1.0"},
+            method="GET",
+        )
+        with self._open(request, timeout=timeout_seconds) as response:  # noqa: S310
+            content_type = response.headers.get_content_type()
+            if content_type != "application/json":
+                raise MarketDataError("A DeFiLlama retornou um tipo de conteúdo inválido")
+            raw = response.read(self.max_response_bytes + 1)
+            if len(raw) > self.max_response_bytes:
+                raise MarketDataError("A resposta da DeFiLlama excedeu o limite permitido")
+            payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, (Mapping, list, tuple)):
             raise MarketDataError("A resposta da DeFiLlama não é um objeto/lista JSON")
         return payload

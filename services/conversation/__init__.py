@@ -1,5 +1,12 @@
 """Aura Core conversacional autenticado e mockável."""
 
+from .anthropic import (
+    AnthropicConfig,
+    AnthropicConfigurationError,
+    AnthropicLlm,
+    AnthropicTransportError,
+)
+
 from .service import (
     AuditMetadata,
     CONVERSATION_SCHEMA_VERSION,
@@ -49,6 +56,10 @@ from .service import (
 )
 
 __all__ = [
+    "AnthropicConfig",
+    "AnthropicConfigurationError",
+    "AnthropicLlm",
+    "AnthropicTransportError",
     "AuditMetadata",
     "CONVERSATION_SCHEMA_VERSION",
     "Consent",

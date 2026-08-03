@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS otp_challenges (
     channel TEXT NOT NULL CHECK (channel IN ('web_widget', 'ios_app', 'simulated')),
     delivery TEXT NOT NULL CHECK (delivery IN ('email', 'mock')),
     otp_digest TEXT NOT NULL CHECK (trim(otp_digest) <> ''),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'verified', 'expired', 'cancelled')),
     expires_at TEXT NOT NULL,
@@ -274,6 +275,17 @@ CREATE TABLE IF NOT EXISTS messages (
         OR (channel_name <> 'simulated' AND channel_simulated = 0))
 );
 
+-- Snapshot operacional do agregado conversacional usado pelo adapter de domínio.
+-- Não contém e-mail, tokens, OTP ou outras credenciais; a escrita inteira é
+-- atômica para que uma conversa não reapareça com apenas metade das mensagens.
+CREATE TABLE IF NOT EXISTS conversation_runtime_state (
+    conversation_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    state_json TEXT NOT NULL CHECK (json_valid(state_json) AND json_type(state_json) = 'object'),
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     alert_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -299,6 +311,8 @@ CREATE INDEX IF NOT EXISTS idx_risk_profiles_account ON risk_profiles(account_id
 CREATE INDEX IF NOT EXISTS idx_opportunities_created ON opportunities(created_at, opportunity_id);
 CREATE INDEX IF NOT EXISTS idx_simulations_account ON simulations(account_id, generated_at);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, occurred_at, message_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_runtime_account
+    ON conversation_runtime_state(account_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_account_status ON alerts(account_id, status, created_at);
 
 COMMIT;

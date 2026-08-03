@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: aurafi-api
+    runtime: docker
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      name: aurafi-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: AURAFI_ENV
+        value: production
+      - key: AURAFI_API_HOST
+        value: 0.0.0.0
+      - key: AURAFI_ALLOWED_ORIGINS
+        sync: false
+      - key: AURAFI_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: AURAFI_DB_PATH
+        value: /data/aurafi.sqlite3
+      - key: AURAFI_ALLOW_SELF_SIGNUP
+        value: "true"
+      - key: AURAFI_OTP_PROVIDER
+        value: smtp
+      - key: AURAFI_OTP_SMTP_HOST
+        sync: false
+      - key: AURAFI_OTP_SMTP_PORT
+        value: "587"
+      - key: AURAFI_OTP_SMTP_STARTTLS
+        value: "true"
+      - key: AURAFI_OTP_SMTP_SSL
+        value: "false"
+      - key: AURAFI_OTP_FROM_EMAIL
+        sync: false
+      - key: AURAFI_OTP_SMTP_USERNAME
+        sync: false
+      - key: AURAFI_OTP_SMTP_PASSWORD
+        sync: false
+      - key: AURAFI_OTP_HMAC_PEPPER
+        generateValue: true
+      - key: AURAFI_OTP_REQUEST_LIMIT
+        value: "5"
+      - key: AURAFI_OTP_VERIFY_LIMIT
+        value: "10"
+      - key: AURAFI_ENABLE_MARKET_NETWORK
+        value: "true"
+      - key: AURAFI_MARKET_MODE
+        value: live
+      - key: AURAFI_MARKET_BASE_URL
+        value: https://yields.llama.fi
+      - key: AURAFI_MARKET_ENDPOINT
+        value: /pools
+      - key: AURAFI_LLM_PROVIDER
+        value: anthropic
+      - key: AURAFI_LLM_REQUEST_LIMIT
+        value: "30"
+      - key: AURAFI_ANTHROPIC_API_KEY
+        sync: false

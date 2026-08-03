@@ -14,7 +14,7 @@ from services.conversation import (
     AuditMetadata,
     Consent,
     ConversationService,
-    
+    LlmResult,
     MessageEnvelope,
     MessageResponse,
     MessageRequest,
@@ -129,6 +129,30 @@ def make_identity(clock: MutableClock | None = None) -> tuple[IdentityService, M
 
 
 class IdentityDomainTests(unittest.TestCase):
+    def test_self_signup_opt_in_creates_account_and_delivers_otp(self) -> None:
+        sink = InMemoryOtpSink(capture_secrets=True)
+        accounts = InMemoryAccountRepository()
+        service = IdentityService(
+            accounts=accounts,
+            challenges=InMemoryOtpChallengeRepository(),
+            sessions=InMemorySessionRepository(),
+            channel_identities=InMemoryChannelIdentityRepository(),
+            otp_delivery=sink,
+            otp_generator=SequenceGenerator("123456"),
+            otp_hasher=HmacOtpHasher(b"self-signup-test-pepper"),
+            token_generator=SequenceGenerator("access", "refresh"),
+            id_generator=IdFactory(),
+            allow_self_signup=True,
+        )
+
+        challenge = service.request_otp("nova@example.com", "ios_app")
+        account = accounts.find_by_email("nova@example.com")
+
+        self.assertIsNotNone(account)
+        self.assertEqual(sink.code_for(challenge.challenge_id), "123456")
+        auth = service.verify_otp(challenge.challenge_id, "123456")
+        self.assertEqual(auth.session.account.email, "nova@example.com")
+
     def test_otp_invalido_consumes_attempt_and_exposes_safe_error(self) -> None:
         service, _, sink = make_identity()
         challenge = service.request_otp(" maria@example.com ", "web_widget", request_id="req-1")
@@ -366,6 +390,35 @@ class SimulationAndConversationTests(unittest.TestCase):
         self.assertIn("retorno", assistant.disclaimer.lower())
         self.assertEqual(assistant.request_id, "req-msg")
         self.assertEqual(assistant.correlation_id, created.conversation.correlation_id)
+
+    def test_provider_output_requesting_secrets_is_replaced_by_safe_faq(self) -> None:
+        class UnsafeProvider:
+            def complete(self, request):
+                return LlmResult(
+                    "Envie sua seed phrase e assine a transação para continuar.",
+                    mode="provider",
+                    provider="claude",
+                    model="provider-test",
+                )
+
+        identity, token, consent = self._authenticated_conversation()
+        conversation = ConversationService(
+            identity=identity,
+            llm=UnsafeProvider(),
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("provider-output"),
+        )
+        created = conversation.create_conversation(token, "simulated", consent)
+        response = conversation.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest("Como começo?", "simulated", consent),
+        )
+
+        text = response.assistant_message.payload["text"].casefold()
+        self.assertNotIn("seed phrase", text)
+        self.assertNotIn("assine a transação", text)
+        self.assertTrue(response.assistant_message.payload["fallback_used"])
 
 
 class SimulatedChannelTests(unittest.TestCase):

@@ -17,12 +17,12 @@ else:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Servidor API local do AuraFi")
+    parser = argparse.ArgumentParser(description="Servidor API do AuraFi")
     parser.add_argument("--host", default=os.environ.get("AURAFI_API_HOST", DEFAULT_HOST))
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("AURAFI_API_PORT", str(DEFAULT_PORT))),
+        default=int(os.environ.get("AURAFI_API_PORT") or os.environ.get("PORT") or str(DEFAULT_PORT)),
         help="Porta TCP; use 0 para uma porta efemera em testes.",
     )
     parser.add_argument("--version", action="version", version=API_VERSION)
@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     server = create_server(create_app(), host=args.host, port=args.port)
-    print(f"AuraFi API local em {server.base_url}", flush=True)
+    print(f"AuraFi API ouvindo em {server.base_url}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

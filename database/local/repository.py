@@ -74,6 +74,14 @@ class SQLiteRepository:
         with self._lock:
             connection = self._require_connection()
             connection.executescript(path.read_text(encoding="utf-8"))
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(otp_challenges)").fetchall()
+            }
+            if "attempts" not in columns:
+                connection.execute(
+                    "ALTER TABLE otp_challenges ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)"
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -159,14 +167,15 @@ class SQLiteRepository:
         with self._transaction() as connection:
             connection.execute(
                 """INSERT INTO otp_challenges
-                (challenge_id, email, channel, delivery, otp_digest, status, expires_at, created_at, verified_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (challenge_id, email, channel, delivery, otp_digest, attempts, status, expires_at, created_at, verified_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     self._text(values.get("challenge_id"), "challenge_id"),
                     self._normalize_email(values.get("email")),
                     values.get("channel"),
                     values.get("delivery"),
                     self._text(digest, "otp_digest"),
+                    int(values.get("attempts", 0)),
                     values.get("status", "pending"),
                     expires_at,
                     created_at,
@@ -186,11 +195,12 @@ class SQLiteRepository:
         *,
         status: str,
         verified_at: Any = None,
+        attempts: int = 0,
     ) -> dict[str, Any] | None:
         with self._transaction() as connection:
             connection.execute(
-                "UPDATE otp_challenges SET status = ?, verified_at = ? WHERE challenge_id = ?",
-                (status, self._optional_timestamp(verified_at), challenge_id),
+                "UPDATE otp_challenges SET status = ?, verified_at = ?, attempts = ? WHERE challenge_id = ?",
+                (status, self._optional_timestamp(verified_at), int(attempts), challenge_id),
             )
         return self.get_otp_challenge(challenge_id)
 
@@ -658,6 +668,57 @@ class SQLiteRepository:
 
     def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         return [self._decode_message(self._row(row)) for row in self._fetchall("SELECT * FROM messages WHERE conversation_id = ? ORDER BY occurred_at, message_id", (conversation_id,))]
+
+    def save_conversation_runtime_state(
+        self,
+        conversation_id: str,
+        account_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        self._reject_secrets(state)
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO conversation_runtime_state
+                (conversation_id, account_id, state_json, updated_at)
+                VALUES (?, ?, ?, ?)""",
+                (
+                    self._text(conversation_id, "conversation_id"),
+                    self._text(account_id, "account_id"),
+                    self._json(state),
+                    self._timestamp(self._now()),
+                ),
+            )
+
+    def get_conversation_runtime_state(self, conversation_id: str) -> dict[str, Any] | None:
+        row = self._row(
+            self._fetchone(
+                "SELECT state_json FROM conversation_runtime_state WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+        )
+        return json.loads(row["state_json"]) if row is not None else None
+
+    def update_conversation_runtime_state(
+        self,
+        conversation_id: str,
+        account_id: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        self._reject_secrets(state)
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE conversation_runtime_state
+                SET account_id = ?, state_json = ?, updated_at = ?
+                WHERE conversation_id = ?""",
+                (
+                    self._text(account_id, "account_id"),
+                    self._json(state),
+                    self._timestamp(self._now()),
+                    self._text(conversation_id, "conversation_id"),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(conversation_id)
 
     def save_alert(self, alert: Mapping[str, Any]) -> dict[str, Any]:
         source = self._mapping(alert.get("data_source", {}))

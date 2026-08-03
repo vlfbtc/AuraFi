@@ -1,0 +1,12 @@
+.git
+.aurafi-internal
+.runtime
+.venv
+backend
+node_modules
+apps
+analytics
+tests
+*.log
+.DS_Store
+.env*

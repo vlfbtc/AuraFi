@@ -5,13 +5,22 @@ enum AuraFiConfiguration {
         let configuredValue = ProcessInfo.processInfo.environment["AURAFI_API_BASE_URL"]
             ?? Bundle.main.object(forInfoDictionaryKey: "AURAFI_API_BASE_URL") as? String
 
-        if let configuredValue,
-           let url = URL(string: configuredValue.trimmingCharacters(in: .whitespacesAndNewlines)),
-           url.scheme != nil,
-           url.host != nil {
-            return url
+        return validatedAPIBaseURL(from: configuredValue)
+    }
+
+    static func validatedAPIBaseURL(from configuredValue: String?) -> URL? {
+        guard let configuredValue,
+              let url = URL(string: configuredValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased()
+        else {
+            return nil
         }
 
+        if scheme == "https" { return url }
+        #if DEBUG
+        if scheme == "http", host == "127.0.0.1" || host == "localhost" { return url }
+        #endif
         return nil
     }
 }
@@ -126,13 +135,33 @@ struct AuthSession: Decodable {
     let accountId: String
     let email: String
 
-    enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case tokenType = "token_type"
         case expiresAt = "expires_at"
-        case accountId = "account_id"
-        case email
+        case account
+    }
+
+    private struct SessionAccount: Decodable {
+        let accountId: String
+        let email: String
+
+        enum CodingKeys: String, CodingKey {
+            case accountId = "account_id"
+            case email
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try container.decode(String.self, forKey: .accessToken)
+        refreshToken = try container.decode(String.self, forKey: .refreshToken)
+        tokenType = try container.decode(String.self, forKey: .tokenType)
+        expiresAt = try container.decode(String.self, forKey: .expiresAt)
+        let account = try container.decode(SessionAccount.self, forKey: .account)
+        accountId = account.accountId
+        email = account.email
     }
 }
 
@@ -432,8 +461,14 @@ struct AuraFiAPIClient {
         return response.session
     }
 
-    func setRiskProfile(sessionToken: String, profile: RiskProfile) async throws -> ProfileResponse {
-        let answers = (1...5).map { APIAnswer(questionId: "question_\($0)", answer: profile.rawValue) }
+    func setRiskProfile(
+        sessionToken: String,
+        profile: RiskProfile,
+        answers: [APIAnswer]
+    ) async throws -> ProfileResponse {
+        guard answers.count == 5 else {
+            throw AuraFiAPIError.invalidParameter("Responda às cinco perguntas do perfil para continuar.")
+        }
         return try await send(
             method: "PUT",
             path: "/v1/profile/risk",
