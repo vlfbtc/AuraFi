@@ -38,6 +38,18 @@ with recommendation_rows as (
         f.input_tokens,
         f.output_tokens,
         f.llm_cost_usd,
+        cast(null as integer) as user_message_count,
+        cast(null as integer) as aura_message_count,
+        cast(null as smallint) as csat_score,
+        cast(null as {{ dbt.type_boolean() }}) as escalation_flag,
+        cast(null as {{ dbt.type_boolean() }}) as generated_recommendation,
+        cast(null as integer) as resumption_time_seconds,
+        cast(null as integer) as context_loss_events,
+        cast(null as {{ dbt.type_boolean() }}) as premium_conversion_flag,
+        cast(null as numeric(7, 4)) as base_apr_percent,
+        cast(null as numeric(7, 4)) as incentive_apy_percent,
+        cast(null as numeric(4, 2)) as liquidity_score,
+        cast(null as {{ dbt.type_boolean() }}) as recommendable_flag,
         f.is_test_data
     from {{ ref('fato_recomendacao') }} f
     join {{ ref('dim_usuario') }} u on u.user_key = f.user_key
@@ -55,8 +67,8 @@ yield_rows as (
         f.time_key,
         cast(null as {{ dbt.type_string() }}) as user_key,
         cast(null as {{ dbt.type_string() }}) as user_pseudo_id,
-        cast(null as {{ dbt.type_string() }}) as risk_profile_key,
-        cast(null as {{ dbt.type_string() }}) as declared_profile,
+        f.risk_profile_key,
+        rp.declared_profile,
         f.protocol_key,
         pr.protocol_name,
         f.asset_key,
@@ -81,9 +93,22 @@ yield_rows as (
         cast(null as integer) as input_tokens,
         cast(null as integer) as output_tokens,
         cast(null as numeric(12, 6)) as llm_cost_usd,
+        cast(null as integer) as user_message_count,
+        cast(null as integer) as aura_message_count,
+        cast(null as smallint) as csat_score,
+        cast(null as {{ dbt.type_boolean() }}) as escalation_flag,
+        cast(null as {{ dbt.type_boolean() }}) as generated_recommendation,
+        cast(null as integer) as resumption_time_seconds,
+        cast(null as integer) as context_loss_events,
+        cast(null as {{ dbt.type_boolean() }}) as premium_conversion_flag,
+        f.base_apr_percent,
+        f.incentive_apy_percent,
+        f.liquidity_score,
+        f.recommendable_flag,
         f.is_test_data
     from {{ ref('fato_yield_observacao') }} f
     join {{ ref('dim_protocolo') }} pr on pr.protocol_key = f.protocol_key
+    join {{ ref('dim_perfil_risco') }} rp on rp.risk_profile_key = f.risk_profile_key
     join {{ ref('dim_ativo') }} a on a.asset_key = f.asset_key
     join {{ ref('dim_blockchain') }} b on b.blockchain_key = f.blockchain_key
 ),
@@ -121,6 +146,18 @@ conversation_rows as (
         f.input_tokens,
         f.output_tokens,
         f.llm_cost_usd,
+        f.user_message_count,
+        f.aura_message_count,
+        f.csat_score,
+        f.escalation_flag,
+        f.generated_recommendation,
+        f.resumption_time_seconds,
+        f.context_loss_events,
+        f.premium_conversion_flag,
+        cast(null as numeric(7, 4)) as base_apr_percent,
+        cast(null as numeric(7, 4)) as incentive_apy_percent,
+        cast(null as numeric(4, 2)) as liquidity_score,
+        cast(null as {{ dbt.type_boolean() }}) as recommendable_flag,
         f.is_test_data
     from {{ ref('fato_interacao_conversacional') }} f
     join {{ ref('dim_usuario') }} u on u.user_key = f.user_key
@@ -133,4 +170,3 @@ union all
 select * from yield_rows
 union all
 select * from conversation_rows
-

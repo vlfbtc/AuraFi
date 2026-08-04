@@ -57,6 +57,23 @@ CREATE TABLE IF NOT EXISTS sessions (
     CHECK (ended_at IS NULL OR ended_at >= started_at)
 );
 
+-- A conta e a identidade do canal são conceitos separados. Persistir esta
+-- associação mantém o mesmo usuário reconhecível no Widget e no iOS após um
+-- restart da única réplica, sem armazenar telefone, wallet ou outro PII.
+CREATE TABLE IF NOT EXISTS channel_identities (
+    channel_identity_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    channel_name TEXT NOT NULL
+        CHECK (channel_name IN ('web_widget', 'ios_app', 'simulated')),
+    adapter TEXT NOT NULL CHECK (trim(adapter) <> ''),
+    simulated INTEGER NOT NULL DEFAULT 0 CHECK (simulated IN (0, 1)),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE RESTRICT,
+    UNIQUE (account_id, channel_name, adapter),
+    CHECK ((channel_name = 'simulated' AND simulated = 1)
+        OR (channel_name <> 'simulated' AND simulated = 0))
+);
+
 -- Consent is kept because the canonical conversation/message envelope requires
 -- an explicit purpose. It stores no policy text or unnecessary PII.
 CREATE TABLE IF NOT EXISTS consents (
@@ -307,6 +324,8 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_channel_identities_account
+    ON channel_identities(account_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_risk_profiles_account ON risk_profiles(account_id, version);
 CREATE INDEX IF NOT EXISTS idx_opportunities_created ON opportunities(created_at, opportunity_id);
 CREATE INDEX IF NOT EXISTS idx_simulations_account ON simulations(account_id, generated_at);

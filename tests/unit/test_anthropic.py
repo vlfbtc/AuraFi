@@ -34,9 +34,13 @@ class AnthropicAdapterTests(unittest.TestCase):
         )
         result = adapter.complete(
             LlmRequest(
-                text="Explique o que é APY.",
+                text="Explique o que é APY para maria@example.com.",
                 account_id="acc-sensitive",
                 conversation_id="cnv-sensitive",
+                context=(
+                    {"role": "user", "text": "Meu objetivo é entender riscos."},
+                    {"role": "assistant", "text": "Vamos avaliar as premissas."},
+                ),
             )
         )
 
@@ -47,6 +51,12 @@ class AnthropicAdapterTests(unittest.TestCase):
         self.assertNotIn("acc-sensitive", serialized)
         self.assertNotIn("cnv-sensitive", serialized)
         self.assertNotIn("secret-provider-key", repr(captured["payload"]))
+        self.assertNotIn("maria@example.com", serialized)
+        self.assertIn("[email removido]", serialized)
+        self.assertEqual(
+            [item["role"] for item in captured["payload"]["messages"]],
+            ["user", "assistant", "user"],
+        )
         self.assertEqual(captured["headers"]["x-api-key"], "secret-provider-key")
 
     def test_config_hides_key_and_rejects_non_official_endpoint(self) -> None:

@@ -11,6 +11,7 @@
 		A10000000000000000000003 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* OnboardingView.swift */; };
 		A10000000000000000000004 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* DashboardView.swift */; };
 		A10000000000000000000005 /* AuraFiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* AuraFiTests.swift */; };
+		A10000000000000000000006 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SessionStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,6 +27,7 @@
 		A20000000000000000000006 /* AuraFi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AuraFi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000007 /* AuraFiTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuraFiTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000008 /* AuraFiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AuraFiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000009 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -46,6 +48,7 @@
 				A20000000000000000000002 /* APIClient.swift */,
 				A20000000000000000000003 /* OnboardingView.swift */,
 				A20000000000000000000004 /* DashboardView.swift */,
+				A20000000000000000000009 /* SessionStore.swift */,
 				A40000000000000000000002 /* Config */,
 				A40000000000000000000004 /* Tests */,
 				A40000000000000000000003 /* Products */,
@@ -137,6 +140,7 @@
 				A10000000000000000000002 /* APIClient.swift in Sources */,
 				A10000000000000000000003 /* OnboardingView.swift in Sources */,
 				A10000000000000000000004 /* DashboardView.swift in Sources */,
+				A10000000000000000000006 /* SessionStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -36,4 +36,14 @@ seeds:
       read_only: boolean
       fallback_used: boolean
       escalation_flag: boolean
-
+      wallet_connected: boolean
+      is_current: boolean
+      audit_required: boolean
+      insurance_available: boolean
+      official_bridge: boolean
+      push_supported: boolean
+      attachment_supported: boolean
+      simulated: boolean
+      recommendable_flag: boolean
+      generated_recommendation: boolean
+      premium_conversion_flag: boolean

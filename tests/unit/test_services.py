@@ -420,6 +420,80 @@ class SimulationAndConversationTests(unittest.TestCase):
         self.assertNotIn("assine a transação", text)
         self.assertTrue(response.assistant_message.payload["fallback_used"])
 
+    def test_hub_sends_prior_context_only_when_memory_is_granted(self) -> None:
+        class CapturingProvider:
+            def __init__(self):
+                self.requests = []
+
+            def complete(self, request):
+                self.requests.append(request)
+                return LlmResult(
+                    "Resposta educativa sem promessa de retorno.",
+                    mode="provider",
+                    provider="claude",
+                    model="provider-test",
+                )
+
+        identity, token, _ = self._authenticated_conversation()
+        provider = CapturingProvider()
+        memory_consent = Consent(
+            "conversation", "granted", "consent-v1", NOW, memory=True
+        )
+        conversation = ConversationService(
+            identity=identity,
+            llm=provider,
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("memory-context"),
+        )
+        created = conversation.create_conversation(
+            token, "simulated", memory_consent
+        )
+        conversation.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest("Primeira pergunta", "simulated", memory_consent),
+        )
+        conversation.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest("Continue", "simulated", memory_consent),
+        )
+
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(len(provider.requests[0].context), 0)
+        self.assertEqual(
+            [item["role"] for item in provider.requests[1].context],
+            ["user", "assistant"],
+        )
+
+    def test_hub_resumes_same_account_context_in_another_channel(self) -> None:
+        identity, token, _ = self._authenticated_conversation()
+        consent = Consent(
+            "conversation", "granted", "consent-v1", NOW, memory=True
+        )
+        conversation = ConversationService(
+            identity=identity,
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("cross-channel"),
+        )
+        first = conversation.create_conversation(
+            token, "simulated", consent
+        )
+        conversation.send_message(
+            token,
+            first.conversation.conversation_id,
+            MessageRequest("Guarde este contexto", "simulated", consent),
+        )
+
+        resumed = conversation.create_conversation(token, "ios_app", consent)
+
+        self.assertEqual(
+            resumed.conversation.conversation_id,
+            first.conversation.conversation_id,
+        )
+        self.assertEqual(resumed.conversation.channel.name, "ios_app")
+        self.assertEqual(len(resumed.conversation.messages), 2)
+
 
 class SimulatedChannelTests(unittest.TestCase):
     def _response(self, request_id: str, correlation_id: str, external_id: str) -> MessageResponse:

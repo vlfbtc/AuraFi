@@ -1,0 +1,6 @@
+target_year,metric_name,target_operator,target_value,target_unit,is_test_data
+3,premium_subscribers_min,gte,5000,subscribers,true
+3,premium_subscribers_max,lte,10000,subscribers,true
+3,cac_max_brl,lte,80,brl_per_customer,true
+3,ltv_cac_min_ratio,gte,4,ratio,true
+3,monthly_churn_max_ratio,lte,0.05,ratio,true

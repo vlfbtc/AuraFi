@@ -45,6 +45,7 @@ swiftpm/Package.resolved
 
 # Runtime data and local diagnostics
 .runtime/
+/tmp/
 *.log
 
 # Internal project context

@@ -1,0 +1,4 @@
+risk_profile,profile_code,description,max_loss_tolerance_percent,max_healthy_apy_percent,minimum_tvl_usd,audit_required,is_test_data
+conservative,CONS,Prioriza preservacao e menor volatilidade,5.00,8.00,10000000.00,true,true
+moderate,MOD,Equilibra retorno e risco com diversificacao,15.00,15.00,5000000.00,true,true
+aggressive,ARJ,Aceita maior volatilidade em busca de retorno,30.00,30.00,1000000.00,false,true

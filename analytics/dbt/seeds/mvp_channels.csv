@@ -1,0 +1,6 @@
+channel_name,channel_type,adapter,adapter_version,launch_date,push_supported,attachment_supported,estimated_message_cost_usd,simulated,is_test_data
+web_widget,web_widget,web_widget_adapter,1.0.0,2026-08-02,false,false,0.00000,false,true
+ios_app,native_app,ios_app_adapter,1.0.0,2026-08-02,true,true,0.00000,false,true
+whatsapp_business,messaging,whatsapp_adapter,1.0.0,2026-08-02,true,true,0.00800,false,true
+telegram,messaging,telegram_adapter,1.0.0,2026-08-02,true,true,0.00000,false,true
+simulated,simulation,simulated_channel_adapter,1.0.0,2026-08-02,false,false,0.00000,true,true

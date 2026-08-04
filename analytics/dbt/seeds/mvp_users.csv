@@ -1,0 +1,4 @@
+user_pseudo_id,user_version,age_band,gender,state_code,city_size,plan,registered_on,acquisition_channel,wallet_connected,crypto_experience,valid_from,valid_to,is_current,is_test_data
+user_pseudo_001,1,25-34,prefers_not_to_say,SP,capital,free,2026-08-02,organic,false,beginner,2026-08-02T09:55:00+00:00,2026-08-02T10:15:00+00:00,false,true
+user_pseudo_001,2,25-34,prefers_not_to_say,SP,capital,premium,2026-08-02,organic,false,beginner,2026-08-02T10:15:00+00:00,,true,true
+user_pseudo_002,1,35-44,prefers_not_to_say,RJ,metropolitan,free,2026-08-02,referral,false,intermediate,2026-08-02T10:55:00+00:00,,true,true

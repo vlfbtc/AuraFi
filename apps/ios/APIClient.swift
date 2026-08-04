@@ -20,7 +20,11 @@ enum AuraFiConfiguration {
         guard let configuredValue,
               let url = URL(string: configuredValue.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme?.lowercased(),
-              let host = url.host?.lowercased()
+              let host = url.host?.lowercased(),
+              url.user == nil,
+              url.password == nil,
+              url.query == nil,
+              url.fragment == nil
         else {
             return nil
         }
@@ -161,6 +165,22 @@ struct AuthSession: Decodable {
         }
     }
 
+    init(
+        accessToken: String,
+        refreshToken: String,
+        tokenType: String,
+        expiresAt: String,
+        accountId: String,
+        email: String
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.tokenType = tokenType
+        self.expiresAt = expiresAt
+        self.accountId = accountId
+        self.email = email
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         accessToken = try container.decode(String.self, forKey: .accessToken)
@@ -235,7 +255,7 @@ struct APIAnswer: Encodable {
     }
 }
 
-struct APIMarketValue: Decodable {
+struct APIMarketValue: Codable {
     let value: Double
     let unit: String?
     let currency: String?
@@ -249,7 +269,7 @@ struct APIMarketValue: Decodable {
     }
 }
 
-struct APILiquidity: Decodable {
+struct APILiquidity: Codable {
     let level: String
     let observedAt: String
 
@@ -259,13 +279,13 @@ struct APILiquidity: Decodable {
     }
 }
 
-struct APIRisk: Decodable {
+struct APIRisk: Codable {
     let score: Double?
     let level: String
     let dimensions: [String]
 }
 
-struct Opportunity: Identifiable, Decodable {
+struct Opportunity: Identifiable, Codable {
     let opportunityId: String
     let protocolName: String
     let pool: String
@@ -411,6 +431,88 @@ struct SimulationInputResponse: Decodable {
     }
 }
 
+struct ConversationConsent: Codable {
+    let purpose: String
+    let status: String
+    let policyVersion: String
+    let capturedAt: String
+    let memory: Bool
+    let analytics: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case purpose, status, memory, analytics
+        case policyVersion = "policy_version"
+        case capturedAt = "captured_at"
+    }
+
+    static func granted(now: Date = Date()) -> ConversationConsent {
+        ConversationConsent(
+            purpose: "conversation",
+            status: "granted",
+            policyVersion: "privacy-1.0",
+            capturedAt: ISO8601DateFormatter().string(from: now),
+            memory: false,
+            analytics: false
+        )
+    }
+}
+
+struct ConversationMessage: Identifiable, Decodable {
+    let messageId: String
+    let messageType: String
+    let occurredAt: String
+    let payload: ConversationPayload
+
+    var id: String { messageId }
+    var isFromUser: Bool { messageType == "user_message" }
+
+    enum CodingKeys: String, CodingKey {
+        case messageId = "message_id"
+        case messageType = "message_type"
+        case occurredAt = "occurred_at"
+        case payload
+    }
+}
+
+struct ConversationPayload: Decodable {
+    let text: String?
+    let fallbackUsed: Bool?
+    let escalationFlag: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case fallbackUsed = "fallback_used"
+        case escalationFlag = "escalation_flag"
+    }
+}
+
+struct ConversationRecord: Decodable {
+    let conversationId: String
+    let status: String
+    let messages: [ConversationMessage]
+    let lastActivityAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case conversationId = "conversation_id"
+        case status, messages
+        case lastActivityAt = "last_activity_at"
+    }
+}
+
+struct ConversationResponse: Decodable {
+    let conversation: ConversationRecord
+}
+
+struct ConversationMessageResponse: Decodable {
+    let userMessage: ConversationMessage
+    let assistantMessage: ConversationMessage
+
+    enum CodingKeys: String, CodingKey {
+        case userMessage = "user_message"
+        case assistantMessage = "assistant_message"
+    }
+}
+
 private struct ErrorResponse: Decodable {
     let error: APIErrorBody
 }
@@ -548,6 +650,75 @@ struct AuraFiAPIClient {
         return response.simulation
     }
 
+    func getProfile(sessionToken: String) async throws -> ProfileResponse {
+        try await send(
+            method: "GET",
+            path: "/v1/profile",
+            body: Optional<EmptyBody>.none,
+            token: sessionToken
+        )
+    }
+
+    func refreshSession(refreshToken: String) async throws -> AuthSession {
+        struct Body: Encodable {
+            let refreshToken: String
+            enum CodingKeys: String, CodingKey { case refreshToken = "refresh_token" }
+        }
+        let response: AuthResponse = try await send(
+            method: "POST",
+            path: "/v1/auth/refresh",
+            body: Body(refreshToken: refreshToken),
+            authenticated: false
+        )
+        return response.session
+    }
+
+    func logout(sessionToken: String) async throws {
+        try await sendWithoutResponse(method: "POST", path: "/v1/auth/logout", token: sessionToken)
+    }
+
+    func createConversation(
+        sessionToken: String,
+        consent: ConversationConsent,
+        initialMessage: String? = nil
+    ) async throws -> ConversationRecord {
+        struct Body: Encodable {
+            let channel: String
+            let consent: ConversationConsent
+            let initialMessage: String?
+            enum CodingKeys: String, CodingKey {
+                case channel, consent
+                case initialMessage = "initial_message"
+            }
+        }
+        let response: ConversationResponse = try await send(
+            method: "POST",
+            path: "/v1/conversations",
+            body: Body(channel: channel, consent: consent, initialMessage: initialMessage),
+            token: sessionToken
+        )
+        return response.conversation
+    }
+
+    func sendConversationMessage(
+        sessionToken: String,
+        conversationId: String,
+        text: String,
+        consent: ConversationConsent
+    ) async throws -> ConversationMessageResponse {
+        struct Body: Encodable {
+            let text: String
+            let channel: String
+            let consent: ConversationConsent
+        }
+        return try await send(
+            method: "POST",
+            path: "/v1/conversations/\(conversationId)/messages",
+            body: Body(text: text, channel: channel, consent: consent),
+            token: sessionToken
+        )
+    }
+
     private func makeURL(path: String) throws -> URL {
         guard let baseURL else { throw AuraFiAPIError.configuration }
         return baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
@@ -597,6 +768,35 @@ struct AuraFiAPIClient {
                 return try JSONDecoder().decode(Response.self, from: data)
             } catch {
                 throw AuraFiAPIError.decoding(error)
+            }
+        } catch let error as AuraFiAPIError {
+            throw error
+        } catch {
+            throw AuraFiAPIError.transport(error)
+        }
+    }
+
+    private func sendWithoutResponse(method: String, path: String, token: String) async throws {
+        let url = try makeURL(path: path)
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(channel, forHTTPHeaderField: "X-Channel")
+        request.setValue(correlationId, forHTTPHeaderField: "X-Correlation-ID")
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw AuraFiAPIError.invalidResponse
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                throw AuraFiAPIError.server(
+                    status: httpResponse.statusCode,
+                    code: error?.error.code ?? "API_ERROR",
+                    message: error?.error.message ?? "O serviço não pôde concluir a solicitação."
+                )
             }
         } catch let error as AuraFiAPIError {
             throw error

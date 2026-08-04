@@ -197,6 +197,16 @@ class ApiSmokeTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         token = authenticated["session"]["access_token"]
+        refresh_token = authenticated["session"]["refresh_token"]
+
+        status, refreshed = self.request(
+            "POST",
+            "/v1/auth/refresh",
+            {"refresh_token": refresh_token},
+        )
+        self.assertEqual(status, 200)
+        self.assertNotEqual(refreshed["session"]["access_token"], token)
+        token = refreshed["session"]["access_token"]
 
         answers = [{"question_id": f"q{i}", "answer": "resposta declarada"} for i in range(1, 6)]
         status, profile = self.request(
@@ -211,6 +221,17 @@ class ApiSmokeTests(unittest.TestCase):
         status, opportunities = self.request("GET", "/v1/opportunities", token=token)
         self.assertEqual(status, 200)
         opportunity = opportunities["items"][0]
+
+        status, detail = self.request(
+            "GET",
+            f"/v1/opportunities/{opportunity['opportunity_id']}",
+            token=token,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            detail["opportunity"]["opportunity_id"],
+            opportunity["opportunity_id"],
+        )
 
         status, simulation = self.request(
             "POST",
@@ -242,8 +263,36 @@ class ApiSmokeTests(unittest.TestCase):
             {"text": "Quais riscos devo observar?", "channel": "simulated", "consent": consent},
             token,
         )
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 201)
         self.assertEqual(message["assistant_message"]["channel"]["name"], "simulated")
+
+        self.app._alerts["acc_maria"] = [
+            {
+                "alert_id": "alert-test-1",
+                "account_id": "acc_maria",
+                "type": "data_stale",
+                "title": "Dados precisam ser atualizados",
+                "message": "Confira a fonte antes de decidir.",
+                "status": "unread",
+                "created_at": "2026-08-03T12:00:00Z",
+                "suggested_action": "none",
+                "disclaimer": "Alerta educativo; não garante retorno.",
+            }
+        ]
+        status, alerts = self.request(
+            "GET", "/v1/alerts?unread_only=true", token=token
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(alerts["pagination"]["total"], 1)
+        status, updated_alert = self.request(
+            "PATCH",
+            "/v1/alerts/alert-test-1",
+            {"status": "read"},
+            token,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated_alert["alert"]["status"], "read")
+
         self.assertIn("disclaimer", message["assistant_message"])
 
         status, rejected = self.request(
@@ -258,6 +307,13 @@ class ApiSmokeTests(unittest.TestCase):
         )
         self.assertEqual(status, 422)
         self.assertEqual(rejected["error"]["code"], "CONSENT_REQUIRED")
+
+        status, payload = self.request("POST", "/v1/auth/logout", token=token)
+        self.assertEqual(status, 204)
+        self.assertIsNone(payload)
+        status, unauthorized = self.request("GET", "/v1/profile", token=token)
+        self.assertEqual(status, 401)
+        self.assertEqual(unauthorized["error"]["code"], "AUTHENTICATION_FAILED")
 
     def test_recommendation_without_policy_is_fail_closed(self) -> None:
         status, requested = self.request(
@@ -361,6 +417,9 @@ class ApiSmokeTests(unittest.TestCase):
         ):
             first = create_app()
             challenge_id, first_token = authenticate(first)
+            stored_identity = first.persistence.first_channel_identity("acc_maria")
+            self.assertIsNotNone(stored_identity)
+            self.assertEqual(stored_identity["channel_name"], "simulated")
             stored_challenge = first.persistence.get_otp_challenge(challenge_id)
             self.assertIsNotNone(stored_challenge)
             self.assertTrue(stored_challenge["otp_digest"])
@@ -409,7 +468,18 @@ class ApiSmokeTests(unittest.TestCase):
                     },
                 )
             )
-            self.assertEqual(sent.status, 200)
+            self.assertEqual(sent.status, 201)
+            canonical_conversation = first.persistence.get_conversation(
+                conversation_id
+            )
+            self.assertIsNotNone(canonical_conversation)
+            self.assertEqual(
+                canonical_conversation["consent_id"],
+                f"cns_{conversation_id}",
+            )
+            self.assertEqual(
+                len(first.persistence.list_messages(conversation_id)), 2
+            )
             first.close()
 
             second = create_app()
@@ -435,6 +505,11 @@ class ApiSmokeTests(unittest.TestCase):
                 )
                 self.assertEqual(profile.status, 200)
                 self.assertTrue(profile.payload["account"]["email_verified"])
+                restored_identity = second.persistence.first_channel_identity("acc_maria")
+                self.assertEqual(
+                    restored_identity["channel_identity_id"],
+                    stored_identity["channel_identity_id"],
+                )
                 conversation = second.handle(
                     Request(
                         method="GET",

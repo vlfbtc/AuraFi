@@ -1,0 +1,8 @@
+event_id,prompt_version,base_apr_percent,incentive_apy_percent,protocol_tvl_snapshot_usd,apy_volatility_30d,impermanent_loss_30d_percent,liquidity_score,recommendable_flag,user_message_count,aura_message_count,main_topic,csat_score,generated_recommendation,resumption_time_seconds,context_loss_events,premium_conversion_flag,session_input_tokens,session_output_tokens,session_llm_cost_usd,is_test_data
+TEST-MARIA-001,v1.0.0,,,,,,,,,,,,,,,,,,,true
+TEST-MARIA-002,,4.8,0.4,2230000.00,0.35,0.00,9.10,true,,,,,,,,,,,,true
+TEST-MARIA-003,,4.1,0.5,2230000.00,0.80,0.00,7.20,false,,,,,,,,,,,,true
+TEST-MARIA-004,,,,,,,,,2,2,recommendation,5,true,,0,false,420,130,0.003100,true
+TEST-MARIA-005,v1.0.0,,,,,,,,,,,,,,,,,,,true
+TEST-MARIA-006,,,,,,,,,2,1,simulation,4,true,960,0,true,500,160,0.003900,true
+TEST-AVA-007,,,,,,,,,1,1,general_question,,false,,1,false,180,70,0.001500,true

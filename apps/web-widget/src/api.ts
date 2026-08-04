@@ -56,6 +56,8 @@ export interface AuthSession {
   email: string;
 }
 
+export const DEFAULT_PUBLIC_API_BASE_URL = 'https://aurafi-api.onrender.com';
+
 export interface RiskProfile {
   declaredProfile: ProfileLevel;
   status: 'declared' | 'missing';
@@ -442,7 +444,7 @@ const reportApiFailure = (error: ApiClientError, operation: string): void => {
 };
 
 export function createWidgetApi(options: ApiClientOptions = {}) {
-  const baseUrl = (options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '').trim();
+  const baseUrl = (options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? DEFAULT_PUBLIC_API_BASE_URL).trim();
   const allowDemoData = import.meta.env.VITE_ALLOW_DEMO_DATA === 'true';
   const requestedMode = options.mode;
   const mode = allowDemoData
@@ -556,6 +558,21 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
       }),
     ),
 
+    refreshSession: (refreshToken: string, context: RequestContext = {}): Promise<ApiResult<AuthSession>> => withFallback(
+      context,
+      () => fixtureResult({ accessToken: 'token_fixture_rotated', refreshToken: 'refresh_fixture_rotated', tokenType: 'Bearer', expiresAt: new Date(Date.now() + 3600000).toISOString(), accountId: 'account_fixture_001', email: 'maria.fixture@example.test' }, context),
+      () => request('POST', '/v1/auth/refresh', context, { refresh_token: refreshToken }, (value) => {
+        const raw = value as { session: { access_token: string; refresh_token: string; token_type: 'Bearer'; expires_at: string; account: { account_id: string; email: string } } };
+        return { accessToken: raw.session.access_token, refreshToken: raw.session.refresh_token, tokenType: raw.session.token_type, expiresAt: raw.session.expires_at, accountId: raw.session.account.account_id, email: raw.session.account.email };
+      }),
+    ),
+
+    logout: (context: RequestContext = {}): Promise<ApiResult<null>> => withFallback(
+      context,
+      () => fixtureResult(null, context),
+      () => request('POST', '/v1/auth/logout', context, undefined, () => null),
+    ),
+
     getProfile: (context: RequestContext = {}): Promise<ApiResult<ProfileData>> => withFallback(
       context,
       () => fixtureResult(fixtureProfile, context),
@@ -604,7 +621,7 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
     sendConversationMessage: (conversationId: string, input: MessageInput, context: RequestContext = {}): Promise<ApiResult<ConversationData>> => withFallback(
       context,
       () => fixtureResult({ ...fixtureConversation, conversationId, messages: [...fixtureConversation.messages, makeFixtureMessage(input.text, context)] }, context),
-      () => request('POST', `/v1/conversations/${encodeURIComponent(conversationId)}/messages`, context, { text: input.text, channel: 'web_widget', action: input.action ?? null, consent: toApiConsent(input.consent) }, (value) => toConversationMessage(value)),
+      () => request('POST', `/v1/conversations/${encodeURIComponent(conversationId)}/messages`, context, { text: input.text, channel: 'web_widget', action: input.action ?? null, consent: toApiConsent(input.consent) }, (value) => toConversationMessage(conversationId, value)),
     ),
 
     listAlerts: (params: AlertListParams = {}, context: RequestContext = {}): Promise<ApiResult<AlertListData>> => withFallback(
@@ -748,9 +765,9 @@ const toConversation = (value: unknown): ConversationData => {
   return { conversationId: raw.conversation.conversation_id, status: raw.conversation.status, messages: raw.conversation.messages.map(toMessage) };
 };
 
-const toConversationMessage = (value: unknown): ConversationData => {
+const toConversationMessage = (conversationId: string, value: unknown): ConversationData => {
   const raw = value as { user_message: Parameters<typeof toMessage>[0]; assistant_message: Parameters<typeof toMessage>[0] };
-  return { conversationId: 'api-response', status: 'active', messages: [toMessage(raw.user_message), toMessage(raw.assistant_message)] };
+  return { conversationId, status: 'active', messages: [toMessage(raw.user_message), toMessage(raw.assistant_message)] };
 };
 
 export const widgetApi = createWidgetApi();

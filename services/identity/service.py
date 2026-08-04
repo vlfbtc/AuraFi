@@ -416,6 +416,8 @@ class ChannelIdentityRepository(Protocol):
 
     def find(self, account_id: str, channel: ChannelContext) -> ChannelAssociation | None: ...
 
+    def first_for_account(self, account_id: str) -> ChannelAssociation | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class OtpDeliveryMessage:
@@ -611,6 +613,19 @@ class InMemoryChannelIdentityRepository:
         with self._lock:
             association_id = self._key_index.get((account_id, channel.name, channel.adapter))
             return self._associations.get(association_id) if association_id else None
+
+    def first_for_account(self, account_id: str) -> ChannelAssociation | None:
+        with self._lock:
+            matches = [
+                association
+                for association in self._associations.values()
+                if association.account_id == account_id
+            ]
+            return min(
+                matches,
+                key=lambda item: (item.created_at, item.channel_identity_id),
+                default=None,
+            )
 
 
 class InMemoryOtpSink:
@@ -869,7 +884,11 @@ class IdentityService:
             refresh_token_digest=self._token_hasher.digest(new_refresh_token),
         )
         self._sessions.update(refreshed)
-        association = self._channel_identities.find(account.account_id, ChannelContext.from_value("simulated"))
+        association = self._channel_identities.first_for_account(account.account_id)
+        # AuthResponse requires a channel context for compatibility with the
+        # existing envelope. Refreshing does not create or change an
+        # association; when an old account has none, the neutral simulated
+        # context is metadata only.
         channel = association.channel if association else ChannelContext.from_value("simulated")
         return AuthenticationResult(
             session=SessionGrant(

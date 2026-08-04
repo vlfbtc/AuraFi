@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiClientError, createWidgetApi, widgetApi } from './api';
-import type { ApiMeta, Opportunity as ApiOpportunity } from './api';
+import type { ApiMeta, AuthSession, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
 
-type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation';
+type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub';
 type ProfileLevel = 'conservative' | 'moderate' | 'aggressive';
 type ErrorKind = 'empty' | 'invalid' | 'network' | null;
 type ErrorContext = 'email' | 'otp' | 'quiz' | 'profile' | 'simulation';
@@ -288,6 +288,38 @@ const SIMULATION_DISCLAIMER = 'Simulação educativa baseada em premissas explí
 const SIMULATION_HORIZONS: readonly SimulationHorizon[] = [30, 180, 365];
 const DECISION_HISTORY_KEY = 'aurafi-widget-decision-history-v1';
 const SAVED_PLANS_KEY = 'aurafi-widget-saved-plans-v1';
+const AUTH_SESSION_KEY = 'aurafi-widget-auth-session-v1';
+const CONVERSATION_KEY = 'aurafi-widget-conversation-v1';
+
+function readSession(): AuthSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as AuthSession;
+    if (!value.accessToken || !value.refreshToken || !value.expiresAt || !Number.isFinite(Date.parse(value.expiresAt))) {
+      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      window.sessionStorage.removeItem(CONVERSATION_KEY);
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(value: AuthSession | null): void {
+  if (typeof window === 'undefined') return;
+  if (value) window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(value));
+  else {
+    window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+    window.sessionStorage.removeItem(CONVERSATION_KEY);
+  }
+}
+
+function messageText(message: MessageEnvelope): string {
+  return typeof message.payload.text === 'string' ? message.payload.text : 'Mensagem sem conteúdo textual.';
+}
 
 function readLocalArray<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
@@ -444,9 +476,11 @@ function ProgressBar({ current }: { current: number }) {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>('welcome');
-  const [email, setEmail] = useState('');
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [restoredSession] = useState<AuthSession | null>(() => readSession());
+  const [authSession, setAuthSession] = useState<AuthSession | null>(restoredSession);
+  const [view, setView] = useState<View>(() => restoredSession ? 'dashboard' : 'welcome');
+  const [email, setEmail] = useState(() => restoredSession?.email ?? '');
+  const [accessToken, setAccessToken] = useState<string | null>(() => restoredSession && Date.parse(restoredSession.expiresAt) > Date.now() ? restoredSession.accessToken : null);
   const [challenge, setChallenge] = useState<OtpChallenge | null>(null);
   const [otp, setOtp] = useState('');
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -480,6 +514,10 @@ export default function App() {
   const [opportunityMeta, setOpportunityMeta] = useState<ApiMeta | null>(null);
   const [opportunityFilter, setOpportunityFilter] = useState<'all' | RiskLevel>('all');
   const [opportunityRefreshKey, setOpportunityRefreshKey] = useState(0);
+  const [conversation, setConversation] = useState<ConversationData | null>(null);
+  const [conversationDraft, setConversationDraft] = useState('');
+  const [conversationState, setConversationState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [conversationError, setConversationError] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const educationCloseRef = useRef<HTMLButtonElement>(null);
   const educationModalRef = useRef<HTMLElement>(null);
@@ -488,6 +526,16 @@ export default function App() {
     () => accessToken ? createWidgetApi({ token: accessToken }) : widgetApi,
     [accessToken],
   );
+
+  const clearAuthenticatedState = () => {
+    saveSession(null);
+    setAuthSession(null);
+    setAccessToken(null);
+    setConversation(null);
+    setConversationDraft('');
+    setConversationState('idle');
+    setConversationError(null);
+  };
 
   const currentQuestion = questions[currentQuestionIndex];
   const selectedAnswer = currentQuestion ? answers[currentQuestion.id] : undefined;
@@ -516,6 +564,60 @@ export default function App() {
   useEffect(() => {
     writeLocalArray(DECISION_HISTORY_KEY, decisionHistory);
   }, [decisionHistory]);
+
+  useEffect(() => {
+    if (!authSession?.refreshToken) return undefined;
+    const refreshInMs = Math.max(0, Date.parse(authSession.expiresAt) - Date.now() - 60_000);
+    const timeout = window.setTimeout(() => {
+      widgetApi.refreshSession(authSession.refreshToken, {
+        requestId: `widget_refresh_${Date.now()}`,
+      }).then((result) => {
+        saveSession(result.data);
+        setAuthSession(result.data);
+        setAccessToken(result.data.accessToken);
+      }).catch(() => {
+        clearAuthenticatedState();
+        setView('email');
+        setErrorContext('email');
+        setErrorKind('network');
+      });
+    }, Math.min(refreshInMs, 2_147_000_000));
+    return () => window.clearTimeout(timeout);
+  }, [authSession]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    apiClient.getProfile().then((result) => {
+      const profile = result.data.riskProfile;
+      if (!profile || profile.status !== 'declared') return;
+      setEmail(result.data.account.email);
+      setDeclaredProfile(profile.declaredProfile);
+      setSavedProfile({ declaredProfile: profile.declaredProfile, answers: {}, declaredAt: profile.declaredAt });
+    }).catch((error: unknown) => {
+      if (error instanceof ApiClientError && error.status === 401) {
+        clearAuthenticatedState();
+        setView('email');
+      }
+    });
+  }, [accessToken, apiClient]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    const conversationId = window.sessionStorage.getItem(CONVERSATION_KEY);
+    if (!conversationId) return;
+    setConversationState('loading');
+    apiClient.getConversation(conversationId).then((result) => {
+      setConversation(result.data);
+      setConversationState('ready');
+    }).catch((error: unknown) => {
+      if (error instanceof ApiClientError && error.status === 401) {
+        clearAuthenticatedState();
+        setView('email');
+      }
+      setConversationState('error');
+      setConversationError('Não foi possível retomar a conversa. Você pode iniciar uma nova conversa com segurança.');
+    });
+  }, [accessToken, apiClient]);
 
   useEffect(() => {
     if (view !== 'dashboard') return undefined;
@@ -799,6 +901,8 @@ export default function App() {
     clearError();
     try {
       const session = (await apiClient.verifyOtp(challenge?.challengeId ?? '', otp)).data;
+      saveSession(session);
+      setAuthSession(session);
       setAccessToken(session.accessToken);
       setCurrentQuestionIndex(0);
       setView('quiz');
@@ -867,9 +971,9 @@ export default function App() {
   };
 
   const restart = () => {
+    clearAuthenticatedState();
     setView('welcome');
     setEmail('');
-    setAccessToken(null);
     setChallenge(null);
     setOtp('');
     setCurrentQuestionIndex(0);
@@ -892,6 +996,74 @@ export default function App() {
     setDecisionMessage(null);
     setIsEducationOpen(false);
     clearError();
+  };
+
+  const handleLogout = async () => {
+    setIsSubmitting(true);
+    try {
+      if (accessToken) await apiClient.logout({ requestId: `widget_logout_${Date.now()}` });
+    } catch {
+      // A limpeza local é obrigatória mesmo se a API já estiver indisponível.
+    } finally {
+      restart();
+      setIsSubmitting(false);
+    }
+  };
+
+  const openHub = async () => {
+    setView('hub');
+    setConversationError(null);
+    if (conversation) return;
+    setConversationState('loading');
+    try {
+      const result = await apiClient.createConversation({
+        consent: {
+          purpose: 'conversation',
+          status: 'granted',
+          policyVersion: 'aurafi-privacy-2026-08',
+          memory: true,
+          analytics: false,
+        },
+      });
+      setConversation(result.data);
+      window.sessionStorage.setItem(CONVERSATION_KEY, result.data.conversationId);
+      setConversationState('ready');
+    } catch {
+      setConversationState('error');
+      setConversationError('A Aura está em manutenção rápida. O catálogo continua disponível e você pode tentar novamente.');
+    }
+  };
+
+  const sendHubMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = conversationDraft.trim();
+    if (!text || !conversation) return;
+    setConversationState('loading');
+    setConversationError(null);
+    try {
+      const result = await apiClient.sendConversationMessage(conversation.conversationId, {
+        text,
+        consent: {
+          purpose: 'conversation',
+          status: 'granted',
+          policyVersion: 'aurafi-privacy-2026-08',
+          memory: true,
+          analytics: false,
+        },
+      }, conversation.messages.at(-1)?.correlationId
+        ? { correlationId: conversation.messages.at(-1)!.correlationId }
+        : {});
+      setConversation((current) => current ? {
+        ...current,
+        status: result.data.status,
+        messages: [...current.messages, ...result.data.messages],
+      } : result.data);
+      setConversationDraft('');
+      setConversationState('ready');
+    } catch {
+      setConversationState('error');
+      setConversationError('Não consegui responder agora. Sua mensagem não foi perdida; tente enviar novamente.');
+    }
   };
 
   const renderWelcome = () => (
@@ -1040,6 +1212,7 @@ export default function App() {
             <p className="lead compact">Oportunidades de mercado para comparar dados, riscos e explicações antes de qualquer próxima etapa.</p>
           </div>
           <div className="dashboard-actions">
+            <button className="primary-button" type="button" onClick={() => { void openHub(); }}>Conversar com a Aura <span aria-hidden="true">→</span></button>
             <button className="secondary-button" type="button" onClick={() => setIsEducationOpen(true)}>Como ler este painel</button>
             <button className="back-button" type="button" onClick={() => setView('result')}>← Ver meu resultado</button>
           </div>
@@ -1264,6 +1437,51 @@ export default function App() {
     );
   };
 
+  const renderHub = () => (
+    <section className="hub-panel" aria-labelledby="hub-title">
+      <div className="hub-heading">
+        <div>
+          <p className="eyebrow">Aura · Hub conversacional</p>
+          <h1 id="hub-title" ref={headingRef} tabIndex={-1}>Converse com a mesma Aura, em qualquer canal.</h1>
+          <p className="lead compact">Seu contexto fica associado à sua conta. Aqui você pode pedir explicações, comparar riscos e retomar esta conversa durante a sessão.</p>
+        </div>
+        <button className="back-button" type="button" onClick={openDashboard}>← Voltar ao painel</button>
+      </div>
+
+      <div className="hub-status" role="status">
+        <span className={`source-indicator ${conversationState === 'error' ? 'source-fallback' : 'source-live'}`} aria-hidden="true" />
+        <div><strong>{conversationState === 'error' ? 'Fallback disponível' : 'Contexto conectado'}</strong><span>Conta autenticada · memória desta conversa ativa · analytics desativado</span></div>
+      </div>
+
+      {conversationError ? <InlineAlert message={conversationError} onRetry={() => { setConversation(null); void openHub(); }} /> : null}
+
+      <div className="conversation-log" role="log" aria-live="polite" aria-relevant="additions text">
+        {!conversation || conversation.messages.length === 0 ? (
+          <div className="hub-empty">
+            <span className="aura-avatar" aria-hidden="true">A</span>
+            <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, os riscos informados e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
+          </div>
+        ) : conversation.messages.map((message) => (
+          <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}`} key={message.messageId}>
+            <span className="message-author">{message.messageType === 'user_message' ? 'Você' : 'Aura'}</span>
+            <p>{messageText(message)}</p>
+            <time dateTime={message.occurredAt}>{formatDateTime(message.occurredAt)}</time>
+          </article>
+        ))}
+        {conversationState === 'loading' ? <div className="chat-thinking" role="status"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /> <em>Aura está organizando a resposta…</em></div> : null}
+      </div>
+
+      {conversation ? (
+        <form className="hub-composer" onSubmit={sendHubMessage}>
+          <label className="sr-only" htmlFor="hub-message">Mensagem para a Aura</label>
+          <textarea id="hub-message" rows={2} maxLength={2000} value={conversationDraft} onChange={(event) => setConversationDraft(event.target.value)} placeholder="Pergunte sobre APY, risco ou uma oportunidade…" disabled={conversationState === 'loading'} />
+          <button className="primary-button" type="submit" disabled={conversationState === 'loading' || !conversationDraft.trim()}>Enviar <span aria-hidden="true">→</span></button>
+        </form>
+      ) : conversationState !== 'loading' ? <button className="primary-button" type="button" onClick={() => { void openHub(); }}>Iniciar nova conversa</button> : null}
+      <p className="disclaimer"><strong>Privacidade e limites:</strong> a conversa usa consentimento explícito, não habilita analytics e não acessa wallet, saldo ou conta bancária. Não compartilhe senhas, OTP ou chaves.</p>
+    </section>
+  );
+
   const renderOpportunity = () => {
     const opportunity = dashboardOpportunities.find((item) => item.opportunityId === selectedOpportunityId);
     if (!opportunity) {
@@ -1373,7 +1591,7 @@ export default function App() {
         </div>
         {errorKind && errorContext === 'profile' ? <InlineAlert message={getErrorMessage(errorKind, 'profile')} {...(errorKind === 'network' ? { onRetry: () => { void handleSaveProfile(); } } : {})} /> : null}
         <p className="disclaimer"><strong>Importante:</strong> este resultado organiza apenas as respostas que você declarou. É uma referência educativa, não uma recomendação personalizada e não garante resultados.</p>
-        <div className="result-actions"><button className="back-button" type="button" onClick={() => setView('quiz')}>← Revisar respostas</button><button className="text-button" type="button" onClick={restart}>Começar novamente</button></div>
+        <div className="result-actions"><button className="back-button" type="button" onClick={() => setView('quiz')}>← Revisar respostas</button><button className="text-button" type="button" onClick={() => { void handleLogout(); }}>Sair e começar novamente</button></div>
       </section>
     );
   };
@@ -1381,8 +1599,11 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="site-header">
-        <button className="brand-button" type="button" onClick={restart} aria-label="AuraFi — voltar ao início"><AuraMark /><span>AuraFi</span></button>
-        <span className="header-caption">Web Widget · {view === 'dashboard' || view === 'opportunity' || view === 'simulation' ? 'estudo informativo' : 'onboarding'}</span>
+        <button className="brand-button" type="button" onClick={() => { if (accessToken) setView('dashboard'); else setView('welcome'); }} aria-label="AuraFi — voltar ao início"><AuraMark /><span>AuraFi</span></button>
+        <div className="header-session">
+          <span className="header-caption">Web Widget · {view === 'hub' ? 'Aura conectada' : view === 'dashboard' || view === 'opportunity' || view === 'simulation' ? 'estudo informativo' : 'onboarding'}</span>
+          {accessToken ? <button className="header-logout" type="button" onClick={() => { void handleLogout(); }} disabled={isSubmitting}>Sair</button> : null}
+        </div>
       </header>
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {isSubmitting ? (view === 'email' ? 'Enviando código.' : view === 'otp' ? 'Conferindo código.' : 'Salvando perfil.') : simulationState === 'loading' ? 'Gerando cenários educativos.' : ''}
@@ -1396,6 +1617,7 @@ export default function App() {
         {view === 'dashboard' ? renderDashboard() : null}
         {view === 'opportunity' ? renderOpportunity() : null}
         {view === 'simulation' ? renderSimulation() : null}
+        {view === 'hub' ? renderHub() : null}
       </main>
       <footer className="site-footer"><span>Conteúdo em português · protótipo navegável</span><span>Privacidade em primeiro lugar</span></footer>
       {renderEducationModal()}

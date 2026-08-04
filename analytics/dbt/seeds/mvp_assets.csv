@@ -1,0 +1,3 @@
+asset_symbol,full_name,asset_type,issuer,backing_type,peg_target,regulation,market_cap_usd,launch_date,is_test_data
+USDC,USD Coin,stablecoin_fiat,Circle,fiat_1_to_1,USD,regulated,65000000000.00,2018-09-26,true
+DAI,Dai Stablecoin,stablecoin_crypto,MakerDAO,crypto_overcollateralized,USD,decentralized,5400000000.00,2017-12-18,true

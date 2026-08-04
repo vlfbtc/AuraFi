@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import os
+import re
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -29,6 +30,48 @@ chave privada, token ou senha e não substitui aconselhamento profissional.
 Não invente APY, TVL, auditoria, risco, saldo ou resultado de simulação. Quando
 faltarem dados verificáveis, diga isso claramente. Recomendações e simulações são
 produzidas por serviços determinísticos separados, nunca por esta conversa."""
+
+_EMAIL_PATTERN = re.compile(
+    r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b",
+    re.IGNORECASE,
+)
+_WALLET_PATTERN = re.compile(r"\b0x[a-f0-9]{40}\b", re.IGNORECASE)
+_SECRET_PATTERN = re.compile(
+    r"\b(?:sk-ant-[a-z0-9_-]+|re_[a-z0-9_-]{12,}|[0-9]{6})\b",
+    re.IGNORECASE,
+)
+
+
+def _redact_text(value: Any) -> str:
+    text = str(value).strip()[:4_000]
+    text = _EMAIL_PATTERN.sub("[email removido]", text)
+    text = _WALLET_PATTERN.sub("[endereço removido]", text)
+    return _SECRET_PATTERN.sub("[segredo removido]", text)
+
+
+def _conversation_messages(request: LlmRequest) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for item in request.context[-12:]:
+        role = str(item.get("role", "")).casefold()
+        if role not in {"user", "assistant"}:
+            continue
+        text = _redact_text(item.get("text", ""))
+        if not text:
+            continue
+        if messages and messages[-1]["role"] == role:
+            messages[-1]["content"] = (
+                messages[-1]["content"] + "\n" + text
+            )[:8_000]
+        else:
+            messages.append({"role": role, "content": text})
+    current = _redact_text(request.text)
+    if messages and messages[-1]["role"] == "user":
+        messages[-1]["content"] = (
+            messages[-1]["content"] + "\n" + current
+        )[:8_000]
+    else:
+        messages.append({"role": "user", "content": current})
+    return messages
 
 
 class AnthropicConfigurationError(ValueError):
@@ -193,8 +236,14 @@ class AnthropicLlm:
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": request.text.strip()}],
+            "messages": _conversation_messages(request),
         }
+        # Sonnet 5 habilita raciocínio adaptativo por padrão e contabiliza
+        # esses tokens dentro de max_tokens. O hub precisa de respostas curtas
+        # e previsíveis; desabilitar thinking evita truncar o texto com o
+        # orçamento editorial de 700 tokens.
+        if self.config.model == "claude-sonnet-5":
+            payload["thinking"] = {"type": "disabled"}
         response = self._post_json(
             self.config.messages_url,
             headers={

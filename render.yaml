@@ -60,3 +60,9 @@ services:
         value: "30"
       - key: AURAFI_ANTHROPIC_API_KEY
         sync: false
+      - key: AURAFI_ANTHROPIC_MODEL
+        value: claude-sonnet-5
+      - key: AURAFI_ANTHROPIC_MAX_TOKENS
+        value: "700"
+      - key: AURAFI_ANTHROPIC_TIMEOUT
+        value: "20"

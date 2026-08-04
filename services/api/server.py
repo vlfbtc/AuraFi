@@ -19,11 +19,12 @@ DEFAULT_ALLOWED_ORIGINS = frozenset(
         "http://localhost:5173",
     }
 )
-ALLOWED_METHODS = "GET, POST, PUT, OPTIONS"
+ALLOWED_METHODS = "GET, POST, PUT, PATCH, OPTIONS"
 ALLOWED_HEADERS = frozenset(
     {
         "authorization",
         "content-type",
+        "idempotency-key",
         "x-request-id",
         "x-correlation-id",
         "x-channel",
@@ -65,6 +66,9 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802 - nome definido pelo stdlib
         self._dispatch("PUT")
+
+    def do_PATCH(self) -> None:  # noqa: N802 - nome definido pelo stdlib
+        self._dispatch("PATCH")
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - nome definido pelo stdlib
         self._dispatch("OPTIONS")

@@ -2,9 +2,14 @@
 
 AuraFi é uma plataforma de apoio à decisão para pessoas que desejam entender oportunidades de stablecoins em DeFi. O produto explica dados de mercado, considera um perfil de risco declarado e oferece simulações educativas. Não há custódia, conexão de wallet, assinatura ou execução de transações.
 
+Consulte [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) para a matriz
+atualizada do que está entregue, das dependências externas e das decisões de
+produto ainda necessárias.
+
 ## Estrutura atual
 
 - `apps/web-widget`: Web Widget atual, Vite + React + TypeScript.
+- `apps/ios`: aplicativo nativo SwiftUI para iOS 17 ou superior.
 - `services/api`: API atual, autenticação interna por OTP, perfil, oportunidades e simulações.
 - `database`: persistência local SQLite e artefatos do DW.
 - `analytics`: validação da camada analítica.
@@ -148,7 +153,7 @@ O nome do simulador pode variar conforme os runtimes instalados no Xcode.
 O `Dockerfile` empacota a API para uma plataforma de containers e escuta em
 `0.0.0.0:$PORT` (ou `8000` quando a plataforma não injeta `PORT`). Em um ambiente publicado, coloque o container atrás do HTTPS e
 do balanceador/reverse proxy gerenciado da plataforma; não exponha a porta HTTP
-diretamente à internet. Use [.env.example](.env.example) somente como catálogo
+diretamente à internet. Use [backend/.env.example](backend/.env.example) somente como catálogo
 de configuração e injete os valores reais pelo secret manager.
 
 O perfil de produção exige:

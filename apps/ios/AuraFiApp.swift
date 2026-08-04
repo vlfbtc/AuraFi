@@ -20,6 +20,14 @@ enum AppFlow {
     case dashboard
 }
 
+enum MainTab: Hashable {
+    case dashboard
+    case aura
+    case simulation
+    case protocols
+    case history
+}
+
 enum RiskProfile: String, CaseIterable, Identifiable, Codable {
     case conservative
     case moderate
@@ -50,6 +58,8 @@ enum RiskProfile: String, CaseIterable, Identifiable, Codable {
 @MainActor
 final class AppModel: ObservableObject {
     let apiClient: AuraFiAPIClient
+    private let sessionStore: SessionStore
+    private let localStore: AppLocalStore
 
     @Published var flow: AppFlow = .welcome
     @Published var email = ""
@@ -60,16 +70,39 @@ final class AppModel: ObservableObject {
     @Published var opportunities: [Opportunity] = []
     @Published var marketSource: APIDataSource?
     @Published var lastSimulation: Simulation?
+    @Published var selectedTab: MainTab = .dashboard
+    @Published var conversation: ConversationRecord?
+    @Published var conversationMessages: [ConversationMessage] = []
+    @Published var conversationConsent: ConversationConsent?
+    @Published var decisions: [DecisionRecord]
+    @Published var isUsingCachedMarket = false
+    @Published var isSendingMessage = false
+    @Published var auraFallbackMessage: String?
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var deliveryMessage: String?
+    private var didAttemptSessionRestore = false
 
     #if DEBUG
     private let previewOpportunities: [Opportunity]?
     #endif
 
-    init(apiClient: AuraFiAPIClient = AuraFiAPIClient()) {
+    init(
+        apiClient: AuraFiAPIClient = AuraFiAPIClient(),
+        sessionStore: SessionStore = SessionStore(),
+        localStore: AppLocalStore = AppLocalStore()
+    ) {
         self.apiClient = apiClient
+        self.sessionStore = sessionStore
+        self.localStore = localStore
+        self.decisions = localStore.loadDecisions()
+        self.opportunities = localStore.loadOpportunities()
+        self.marketSource = self.opportunities.first?.dataSource
+        if let stored = sessionStore.load() {
+            self.session = stored
+            self.email = stored.email
+            self.flow = .dashboard
+        }
         #if DEBUG
         self.previewOpportunities = nil
         #endif
@@ -78,6 +111,9 @@ final class AppModel: ObservableObject {
     #if DEBUG
     init(previewOpportunities: [Opportunity]) {
         self.apiClient = AuraFiAPIClient(baseURL: nil)
+        self.sessionStore = SessionStore()
+        self.localStore = AppLocalStore()
+        self.decisions = []
         self.previewOpportunities = previewOpportunities
     }
     #endif
@@ -108,7 +144,14 @@ final class AppModel: ObservableObject {
                 otp: otpCode.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             self.session = authenticatedSession
-            self.flow = .riskQuiz
+            try sessionStore.save(authenticatedSession)
+            let profile = try await apiClient.getProfile(sessionToken: authenticatedSession.accessToken)
+            if let declared = profile.riskProfile?.declaredProfile {
+                self.declaredProfile = declared
+                self.flow = .dashboard
+            } else {
+                self.flow = .riskQuiz
+            }
         }
     }
 
@@ -144,10 +187,49 @@ final class AppModel: ObservableObject {
             return
         }
 
-        await perform { [self] in
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
             let response = try await apiClient.listOpportunities(sessionToken: session.accessToken)
             self.opportunities = response.items
-            self.marketSource = response.items.first?.dataSource
+            self.marketSource = response.meta?.dataSources?.first ?? response.items.first?.dataSource
+            self.isUsingCachedMarket = false
+            self.localStore.saveOpportunities(response.items)
+        } catch {
+            if opportunities.isEmpty {
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? "Não foi possível atualizar as oportunidades."
+            } else {
+                isUsingCachedMarket = true
+                errorMessage = "Sem conexão agora. Mostramos a última leitura salva neste aparelho."
+            }
+        }
+    }
+
+    func restoreSessionIfNeeded() async {
+        guard !didAttemptSessionRestore else { return }
+        didAttemptSessionRestore = true
+        guard let session else { return }
+        do {
+            let profile = try await apiClient.getProfile(sessionToken: session.accessToken)
+            declaredProfile = profile.riskProfile?.declaredProfile
+            await loadOpportunities()
+        } catch AuraFiAPIError.server(let status, _, _) where status == 401 {
+            do {
+                let refreshed = try await apiClient.refreshSession(refreshToken: session.refreshToken)
+                self.session = refreshed
+                self.email = refreshed.email
+                try sessionStore.save(refreshed)
+                let profile = try await apiClient.getProfile(sessionToken: refreshed.accessToken)
+                declaredProfile = profile.riskProfile?.declaredProfile
+                await loadOpportunities()
+            } catch {
+                restart()
+                errorMessage = "Sua sessão expirou. Entre novamente para continuar."
+            }
+        } catch {
+            isUsingCachedMarket = !opportunities.isEmpty
+            errorMessage = "O serviço está temporariamente indisponível. Você ainda pode consultar os dados salvos."
         }
     }
 
@@ -177,11 +259,86 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func grantConversationConsent() async {
+        conversationConsent = .granted()
+        await ensureConversation()
+    }
+
+    func ensureConversation() async {
+        guard conversation == nil, let session, let consent = conversationConsent else { return }
+        isSendingMessage = true
+        auraFallbackMessage = nil
+        defer { isSendingMessage = false }
+        do {
+            let created = try await apiClient.createConversation(
+                sessionToken: session.accessToken,
+                consent: consent
+            )
+            conversation = created
+            conversationMessages = created.messages
+        } catch {
+            auraFallbackMessage = (error as? LocalizedError)?.errorDescription
+                ?? "A Aura está em manutenção rápida. Tente novamente em instantes."
+        }
+    }
+
+    func sendMessageToAura(_ text: String) async {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized.count <= 4000,
+              let session, let consent = conversationConsent
+        else { return }
+        if conversation == nil { await ensureConversation() }
+        guard let conversation else { return }
+        isSendingMessage = true
+        auraFallbackMessage = nil
+        defer { isSendingMessage = false }
+        do {
+            let response = try await apiClient.sendConversationMessage(
+                sessionToken: session.accessToken,
+                conversationId: conversation.conversationId,
+                text: normalized,
+                consent: consent
+            )
+            conversationMessages.append(response.userMessage)
+            conversationMessages.append(response.assistantMessage)
+            if response.assistantMessage.payload.fallbackUsed == true {
+                auraFallbackMessage = "A IA está indisponível; a resposta segura da FAQ foi usada."
+            }
+        } catch {
+            auraFallbackMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Não foi possível conversar com a Aura agora."
+        }
+    }
+
+    func recordDecision(for opportunity: Opportunity, amount: Double, outcome: DecisionRecord.Outcome) {
+        let projectedYield = lastSimulation?.scenarios.max(by: { $0.horizonDays < $1.horizonDays })?.projectedYield ?? 0
+        let record = DecisionRecord(
+            id: UUID(),
+            opportunityId: opportunity.opportunityId,
+            protocolName: opportunity.protocolName,
+            asset: opportunity.asset,
+            blockchain: opportunity.blockchain,
+            amount: amount,
+            projectedYield: projectedYield,
+            createdAt: Date(),
+            outcome: outcome
+        )
+        decisions.insert(record, at: 0)
+        localStore.saveDecisions(decisions)
+    }
+
+    func logout() async {
+        if let session { try? await apiClient.logout(sessionToken: session.accessToken) }
+        restart()
+    }
+
     func clearError() {
         errorMessage = nil
     }
 
     func restart() {
+        sessionStore.clear()
+        didAttemptSessionRestore = false
         email = ""
         otpCode = ""
         otpChallenge = nil
@@ -190,9 +347,21 @@ final class AppModel: ObservableObject {
         opportunities = []
         marketSource = nil
         lastSimulation = nil
+        selectedTab = .dashboard
+        conversation = nil
+        conversationMessages = []
+        conversationConsent = nil
+        auraFallbackMessage = nil
+        isUsingCachedMarket = false
         deliveryMessage = nil
         errorMessage = nil
         flow = .welcome
+    }
+
+    func deleteLocalData() async {
+        decisions = []
+        localStore.saveDecisions([])
+        await logout()
     }
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) async {

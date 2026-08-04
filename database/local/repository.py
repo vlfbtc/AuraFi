@@ -294,6 +294,66 @@ class SQLiteRepository:
             )
         return self.get_session(values["session_id"])  # type: ignore[return-value]
 
+    def save_channel_identity(
+        self, association: Mapping[str, Any] | Any
+    ) -> dict[str, Any]:
+        values = self._mapping(association)
+        channel = self._mapping(values.get("channel", {}))
+        channel_name = values.get("channel_name", channel.get("name"))
+        adapter = values.get("adapter", channel.get("adapter"))
+        simulated = values.get("simulated", channel.get("simulated", False))
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO channel_identities
+                (channel_identity_id, account_id, channel_name, adapter, simulated, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    self._text(values.get("channel_identity_id"), "channel_identity_id"),
+                    self._text(values.get("account_id"), "account_id"),
+                    channel_name,
+                    self._text(adapter, "adapter"),
+                    int(bool(simulated)),
+                    self._timestamp(values.get("created_at")),
+                ),
+            )
+        return self.get_channel_identity(values["channel_identity_id"])  # type: ignore[return-value]
+
+    create_channel_identity = save_channel_identity
+
+    def get_channel_identity(self, channel_identity_id: str) -> dict[str, Any] | None:
+        return self._decode_channel_identity(
+            self._row(
+                self._fetchone(
+                    "SELECT * FROM channel_identities WHERE channel_identity_id = ?",
+                    (channel_identity_id,),
+                )
+            )
+        )
+
+    def find_channel_identity(
+        self, account_id: str, channel_name: str, adapter: str
+    ) -> dict[str, Any] | None:
+        return self._decode_channel_identity(
+            self._row(
+                self._fetchone(
+                    """SELECT * FROM channel_identities
+                    WHERE account_id = ? AND channel_name = ? AND adapter = ?""",
+                    (account_id, channel_name, adapter),
+                )
+            )
+        )
+
+    def first_channel_identity(self, account_id: str) -> dict[str, Any] | None:
+        return self._decode_channel_identity(
+            self._row(
+                self._fetchone(
+                    """SELECT * FROM channel_identities
+                    WHERE account_id = ? ORDER BY created_at, channel_identity_id LIMIT 1""",
+                    (account_id,),
+                )
+            )
+        )
+
     def save_consent(self, consent: Mapping[str, Any] | Any, **overrides: Any) -> dict[str, Any]:
         values = self._mapping(consent)
         values.update(overrides)
@@ -632,6 +692,36 @@ class SQLiteRepository:
             result["channel"] = {"name": result["channel_name"], "adapter": result["adapter"], "simulated": result["simulated"]}
         return result
 
+    def update_conversation(self, conversation: Mapping[str, Any]) -> dict[str, Any]:
+        channel = self._mapping(conversation.get("channel", {}))
+        values = {
+            **conversation,
+            "channel_name": conversation.get("channel_name", channel.get("name")),
+            "adapter": conversation.get("adapter", channel.get("adapter")),
+            "simulated": conversation.get(
+                "simulated", channel.get("simulated", False)
+            ),
+        }
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE conversations
+                SET channel_name = ?, adapter = ?, simulated = ?, status = ?,
+                    last_activity_at = ?
+                WHERE conversation_id = ? AND account_id = ?""",
+                (
+                    values.get("channel_name"),
+                    values.get("adapter"),
+                    int(bool(values.get("simulated", False))),
+                    values.get("status", "active"),
+                    self._timestamp(values.get("last_activity_at")),
+                    values.get("conversation_id"),
+                    values.get("account_id"),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(values.get("conversation_id"))
+        return self.get_conversation(values["conversation_id"])  # type: ignore[return-value]
+
     def save_message(self, message: Mapping[str, Any]) -> dict[str, Any]:
         conversation = self.get_conversation(message.get("conversation_id"))
         if conversation is None:
@@ -698,6 +788,19 @@ class SQLiteRepository:
             self._fetchone(
                 "SELECT state_json FROM conversation_runtime_state WHERE conversation_id = ?",
                 (conversation_id,),
+            )
+        )
+        return json.loads(row["state_json"]) if row is not None else None
+
+    def latest_conversation_runtime_state(
+        self, account_id: str
+    ) -> dict[str, Any] | None:
+        row = self._row(
+            self._fetchone(
+                """SELECT state_json FROM conversation_runtime_state
+                WHERE account_id = ? ORDER BY updated_at DESC, conversation_id DESC
+                LIMIT 1""",
+                (account_id,),
             )
         )
         return json.loads(row["state_json"]) if row is not None else None
@@ -853,6 +956,20 @@ class SQLiteRepository:
             result[key] = json.loads(result[key])
         result["email_verified"] = bool(result["email_verified"])
         result["channel_simulated"] = bool(result["channel_simulated"])
+        return result
+
+    @staticmethod
+    def _decode_channel_identity(
+        result: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if result is None:
+            return None
+        result["simulated"] = bool(result["simulated"])
+        result["channel"] = {
+            "name": result["channel_name"],
+            "adapter": result["adapter"],
+            "simulated": result["simulated"],
+        }
         return result
 
     @staticmethod

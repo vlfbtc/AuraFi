@@ -1,0 +1,2 @@
+protocol_name,category,primary_blockchain,current_tvl_usd,security_score,audit_status,primary_auditor,launch_year,governance_token,insurance_available,is_test_data
+TestLend,lending,Ethereum,2230000.00,9.20,audited,OpenZeppelin,2024,TEST,true,true

@@ -491,6 +491,9 @@ class ConversationRepository(Protocol):
     def update(self, conversation: ConversationRecord) -> None:
         ...
 
+    def latest_for_account(self, account_id: str) -> ConversationRecord | None:
+        ...
+
 
 class InMemoryConversationRepository:
     """Adapter local determinístico; persistência real fica fora do domínio."""
@@ -514,6 +517,19 @@ class InMemoryConversationRepository:
             if conversation.conversation_id not in self._items:
                 raise KeyError(conversation.conversation_id)
             self._items[conversation.conversation_id] = conversation
+
+    def latest_for_account(self, account_id: str) -> ConversationRecord | None:
+        with self._lock:
+            matches = [
+                item
+                for item in self._items.values()
+                if item.account_id == account_id
+            ]
+            return max(
+                matches,
+                key=lambda item: (item.last_activity_at, item.conversation_id),
+                default=None,
+            )
 
 
 class ProfilePort(Protocol):
@@ -659,6 +675,34 @@ class ConversationService:
         )
         _require_consent(create_request.consent)
         now = self._now()
+        if create_request.consent.memory:
+            existing = self._repository.latest_for_account(
+                resolved.account.account_id
+            )
+            if (
+                existing is not None
+                and existing.status != "closed"
+                and existing.consent.memory
+                and _same_consent(existing.consent, create_request.consent)
+            ):
+                conversation = replace(
+                    existing,
+                    session=SessionSnapshot.from_identity(resolved),
+                    identity=resolved.identity,
+                    channel=_resolved_channel(resolved, create_request.channel),
+                    last_activity_at=now,
+                )
+                if create_request.initial_message:
+                    message_request = MessageRequest(
+                        text=create_request.initial_message,
+                        channel=conversation.channel,
+                        consent=create_request.consent,
+                    )
+                    conversation, _ = self._append_message(
+                        conversation, resolved, message_request, now=now
+                    )
+                self._repository.update(conversation)
+                return ConversationResponse(conversation, resolved.meta)
         conversation = ConversationRecord(
             conversation_id=self._id_factory("cnv"),
             account_id=resolved.account.account_id,
@@ -797,6 +841,7 @@ class ConversationService:
         )
         updated = replace(
             conversation,
+            session=SessionSnapshot.from_identity(resolved),
             identity=resolved.identity,
             channel=channel,
             consent=request.consent,
@@ -844,6 +889,24 @@ class ConversationService:
             account_id=resolved.account.account_id,
             conversation_id=conversation.conversation_id,
             action=action,
+            context=(
+                tuple(
+                    {
+                        "role": (
+                            "user"
+                            if message.message_type == "user_message"
+                            else "assistant"
+                        ),
+                        "text": str(message.payload.get("text", ""))[:2_000],
+                    }
+                    for message in conversation.messages[-12:]
+                    if message.message_type
+                    in {"user_message", "assistant_message"}
+                    and str(message.payload.get("text", "")).strip()
+                )
+                if request.consent.memory
+                else ()
+            ),
         )
         try:
             raw_result = self._call_llm(llm_request)
@@ -1032,7 +1095,10 @@ class ConversationService:
 
     @staticmethod
     def _authorize(conversation: ConversationRecord, resolved: ResolvedIdentity) -> None:
-        if conversation.account_id != resolved.account.account_id or conversation.session.session_id != resolved.session.session_id:
+        # A conversa pertence à conta canônica, não a um token específico.
+        # Isso permite retomada segura após rotação de sessão e em outro canal;
+        # um token de outra conta continua recebendo 404 para não enumerar IDs.
+        if conversation.account_id != resolved.account.account_id:
             raise ConversationNotFoundError()
 
     def _get_profile(self, account_id: str) -> RiskProfile | None:
@@ -1111,6 +1177,11 @@ def _require_consent(consent: Consent) -> None:
 def _require_same_consent(authoritative: Consent, presented: Consent) -> None:
     """Impede que o payload da mensagem altere a decisão persistida da conversa."""
 
+    if not _same_consent(authoritative, presented):
+        raise ConversationConsentError()
+
+
+def _same_consent(authoritative: Consent, presented: Consent) -> bool:
     comparable = lambda value: (
         value.purpose,
         value.status,
@@ -1118,8 +1189,7 @@ def _require_same_consent(authoritative: Consent, presented: Consent) -> None:
         value.memory,
         value.analytics,
     )
-    if comparable(authoritative) != comparable(presented):
-        raise ConversationConsentError()
+    return comparable(authoritative) == comparable(presented)
 
 
 def _resolved_channel(

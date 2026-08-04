@@ -71,6 +71,31 @@ class SQLiteRepositoryTest(unittest.TestCase):
                 "refresh_token_digest": "refresh-digest",
             }
         )
+        channel_identity = self.repository.create_channel_identity(
+            {
+                "channel_identity_id": "channel-ios-1",
+                "account_id": "acct-maria",
+                "channel": {
+                    "name": "ios_app",
+                    "adapter": "ios-app",
+                    "simulated": False,
+                },
+                "created_at": NOW,
+            }
+        )
+        self.assertEqual(channel_identity["channel"]["name"], "ios_app")
+        self.assertEqual(
+            self.repository.find_channel_identity(
+                "acct-maria", "ios_app", "ios-app"
+            )["channel_identity_id"],
+            "channel-ios-1",
+        )
+        self.assertEqual(
+            self.repository.first_channel_identity("acct-maria")[
+                "channel_identity_id"
+            ],
+            "channel-ios-1",
+        )
         self.repository.create_consent(
             {
                 "consent_id": "consent-conversation",

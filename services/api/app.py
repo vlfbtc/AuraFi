@@ -41,6 +41,7 @@ from services.identity import (
     ApiMeta,
     AuthenticationError,
     ChannelContext,
+    ChannelAssociation,
     DeliveryError,
     IdentityService,
     IdentityServiceError,
@@ -373,11 +374,106 @@ class _SQLiteSessionRepository:
         )
 
 
+class _SQLiteChannelIdentityRepository:
+    """Mantém a resolução conta↔canal estável entre restarts."""
+
+    def __init__(self, repository: SQLiteRepository) -> None:
+        self._repository = repository
+
+    @staticmethod
+    def _association(row: Mapping[str, Any] | None) -> ChannelAssociation | None:
+        if row is None:
+            return None
+        return ChannelAssociation(
+            channel_identity_id=str(row["channel_identity_id"]),
+            account_id=str(row["account_id"]),
+            channel=ChannelContext(
+                name=str(row["channel_name"]),  # type: ignore[arg-type]
+                adapter=str(row["adapter"]),
+                simulated=bool(row.get("simulated", False)),
+            ),
+            created_at=_parse_persisted_timestamp(row["created_at"]),
+        )
+
+    def save(self, association: ChannelAssociation) -> None:
+        self._repository.save_channel_identity(
+            {
+                "channel_identity_id": association.channel_identity_id,
+                "account_id": association.account_id,
+                "channel": association.channel.to_dict(),
+                "created_at": association.created_at,
+            }
+        )
+
+    def get(self, channel_identity_id: str) -> ChannelAssociation | None:
+        return self._association(
+            self._repository.get_channel_identity(channel_identity_id)
+        )
+
+    def find(
+        self, account_id: str, channel: ChannelContext
+    ) -> ChannelAssociation | None:
+        return self._association(
+            self._repository.find_channel_identity(
+                account_id, channel.name, channel.adapter
+            )
+        )
+
+    def first_for_account(self, account_id: str) -> ChannelAssociation | None:
+        return self._association(self._repository.first_channel_identity(account_id))
+
+
 class _SQLiteConversationRepository:
     """Persiste o agregado conversacional sem e-mail, token ou OTP."""
 
     def __init__(self, repository: SQLiteRepository) -> None:
         self._repository = repository
+
+    @staticmethod
+    def _consent_id(conversation_id: str) -> str:
+        return f"cns_{conversation_id}"
+
+    def _canonical_values(
+        self, conversation: ConversationRecord
+    ) -> dict[str, Any]:
+        return {
+            "conversation_id": conversation.conversation_id,
+            "account_id": conversation.account_id,
+            "session_id": conversation.session.session_id,
+            "consent_id": self._consent_id(conversation.conversation_id),
+            "correlation_id": conversation.correlation_id,
+            "channel": conversation.channel.to_dict(),
+            "status": conversation.status,
+            "last_activity_at": conversation.last_activity_at,
+        }
+
+    def _ensure_canonical(self, conversation: ConversationRecord) -> None:
+        consent_id = self._consent_id(conversation.conversation_id)
+        if self._repository.get_consent(consent_id) is None:
+            self._repository.save_consent(
+                {
+                    "consent_id": consent_id,
+                    "account_id": conversation.account_id,
+                    **conversation.consent.to_dict(),
+                }
+            )
+        if self._repository.get_conversation(conversation.conversation_id) is None:
+            self._repository.save_conversation(self._canonical_values(conversation))
+
+    def _persist_new_messages(self, conversation: ConversationRecord) -> None:
+        persisted_ids = {
+            str(item["message_id"])
+            for item in self._repository.list_messages(conversation.conversation_id)
+        }
+        for message in conversation.messages:
+            if message.message_id in persisted_ids:
+                continue
+            self._repository.save_message(
+                {
+                    **message.to_dict(),
+                    "conversation_id": conversation.conversation_id,
+                }
+            )
 
     @staticmethod
     def _state(conversation: ConversationRecord) -> dict[str, Any]:
@@ -460,6 +556,8 @@ class _SQLiteConversationRepository:
         )
 
     def save(self, conversation: ConversationRecord) -> None:
+        self._ensure_canonical(conversation)
+        self._persist_new_messages(conversation)
         self._repository.save_conversation_runtime_state(
             conversation.conversation_id,
             conversation.account_id,
@@ -471,7 +569,15 @@ class _SQLiteConversationRepository:
             self._repository.get_conversation_runtime_state(conversation_id)
         )
 
+    def latest_for_account(self, account_id: str) -> ConversationRecord | None:
+        return self._conversation(
+            self._repository.latest_conversation_runtime_state(account_id)
+        )
+
     def update(self, conversation: ConversationRecord) -> None:
+        self._ensure_canonical(conversation)
+        self._repository.update_conversation(self._canonical_values(conversation))
+        self._persist_new_messages(conversation)
         self._repository.update_conversation_runtime_state(
             conversation.conversation_id,
             conversation.account_id,
@@ -514,6 +620,7 @@ class AuraFiApp:
             self.account_repository = InMemoryAccountRepository([initial_account])
             self._challenges = InMemoryOtpChallengeRepository()
             self._sessions = InMemorySessionRepository()
+            channel_identities = InMemoryChannelIdentityRepository()
         else:
             if self.persistence.get_account(initial_account.account_id) is None:
                 if self.persistence.find_account_by_email(initial_account.email) is None:
@@ -521,6 +628,7 @@ class AuraFiApp:
             self.account_repository = _SQLiteAccountRepository(self.persistence)
             self._challenges = _SQLiteOtpChallengeRepository(self.persistence)
             self._sessions = _SQLiteSessionRepository(self.persistence)
+            channel_identities = _SQLiteChannelIdentityRepository(self.persistence)
         configured_provider = os.environ.get("AURAFI_OTP_PROVIDER", "").strip()
         if configured_provider:
             delivery = create_otp_delivery_from_env()
@@ -547,7 +655,7 @@ class AuraFiApp:
             accounts=self.account_repository,
             challenges=self._challenges,
             sessions=self._sessions,
-            channel_identities=InMemoryChannelIdentityRepository(),
+            channel_identities=channel_identities,
             otp_delivery=delivery,
             delivery_mode=delivery_mode,
             otp_generator=otp_generator,
@@ -642,6 +750,10 @@ class AuraFiApp:
                 return self._otp_request(request)
             if route == ("POST", "/v1/auth/otp/verify"):
                 return self._otp_verify(request)
+            if route == ("POST", "/v1/auth/refresh"):
+                return self._refresh_session(request)
+            if route == ("POST", "/v1/auth/logout"):
+                return self._logout(request)
             if route == ("GET", "/v1/profile"):
                 return self._get_profile_response(request)
             if route in {("GET", "/v1/profile/risk"), ("PUT", "/v1/profile/risk")}:
@@ -656,6 +768,14 @@ class AuraFiApp:
                 return self._create_conversation(request)
             if route == ("GET", "/v1/alerts"):
                 return self._alerts_response(request)
+
+            opportunity_get = _opportunity_get_route(request.path)
+            if method == "GET" and opportunity_get is not None:
+                return self._opportunity_detail(request, opportunity_get)
+
+            alert_patch = _alert_patch_route(request.path)
+            if method == "PATCH" and alert_patch is not None:
+                return self._update_alert(request, alert_patch)
 
             conversation_message = _conversation_message_route(request.path)
             if method == "POST" and conversation_message is not None:
@@ -786,6 +906,26 @@ class AuraFiApp:
         )
         return Response(200, result.to_dict())
 
+    def _refresh_session(self, request: Request) -> Response:
+        payload = _object_body(request)
+        refresh_token = payload.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token.strip():
+            raise AuthenticationError()
+        result = self.identity.refresh_session(
+            refresh_token.strip(),
+            request_id=request.request_id,
+            correlation_id=request.correlation_id,
+        )
+        return Response(200, result.to_dict())
+
+    def _logout(self, request: Request) -> Response:
+        self.identity.logout(
+            self._bearer(request),
+            request_id=request.request_id,
+            correlation_id=request.correlation_id,
+        )
+        return Response(204)
+
     def _get_profile_response(self, request: Request) -> Response:
         resolved = self._resolve(request)
         return Response(
@@ -912,6 +1052,31 @@ class AuraFiApp:
         meta["data_sources"] = [opportunity.data_source.to_dict()]
         return Response(201, {"simulation": simulation.to_dict(), "meta": meta})
 
+    def _opportunity_detail(
+        self, request: Request, opportunity_id: str
+    ) -> Response:
+        self._resolve(request)
+        snapshot = self._read_market()
+        opportunity = next(
+            (
+                item
+                for item in snapshot.items
+                if item.opportunity_id == opportunity_id
+            ),
+            None,
+        )
+        if opportunity is None:
+            return self._error_response(
+                request,
+                404,
+                "OPPORTUNITY_NOT_FOUND",
+                "Oportunidade nao encontrada.",
+                retryable=False,
+            )
+        meta = self._meta(request).to_dict()
+        meta["data_sources"] = [snapshot.data_source.to_dict()]
+        return Response(200, {"opportunity": opportunity.to_dict(), "meta": meta})
+
     def _recommendation(self, request: Request) -> Response:
         resolved = self._resolve(request)
         data = _object_body(request)
@@ -992,7 +1157,7 @@ class AuraFiApp:
                 request_id=request.request_id,
                 correlation_id=correlation_id,
             )
-        return Response(200, result.to_dict())
+        return Response(201, result.to_dict())
 
     def _get_conversation(self, request: Request, conversation_id: str) -> Response:
         token = self._bearer(request)
@@ -1007,9 +1172,14 @@ class AuraFiApp:
     def _alerts_response(self, request: Request) -> Response:
         resolved = self._resolve(request)
         query = request.query
-        with self._lock:
-            items = list(self._alerts.get(resolved.account.account_id, ()))
+        if self.persistence is not None:
+            items = self.persistence.list_alerts(resolved.account.account_id)
+        else:
+            with self._lock:
+                items = list(self._alerts.get(resolved.account.account_id, ()))
         status = query.get("status")
+        if query.get("unread_only", "").casefold() == "true":
+            status = "unread"
         if status:
             items = [item for item in items if item.get("status") == status]
         page, page_size = _pagination(query)
@@ -1026,6 +1196,44 @@ class AuraFiApp:
                 },
                 "meta": self._meta(request).to_dict(),
             },
+        )
+
+    def _update_alert(self, request: Request, alert_id: str) -> Response:
+        resolved = self._resolve(request)
+        data = _object_body(request)
+        if data.get("status") != "read":
+            raise RequestValidationError(
+                "status deve ser read.", details={"field": "status"}
+            )
+        if self.persistence is not None:
+            current = self.persistence.get_alert(alert_id)
+            if current is None or current.get("account_id") != resolved.account.account_id:
+                current = None
+            alert = (
+                self.persistence.mark_alert_read(alert_id)
+                if current is not None
+                else None
+            )
+        else:
+            alert = None
+            with self._lock:
+                for index, item in enumerate(
+                    self._alerts.get(resolved.account.account_id, ())
+                ):
+                    if item.get("alert_id") == alert_id:
+                        alert = {**item, "status": "read"}
+                        self._alerts[resolved.account.account_id][index] = alert
+                        break
+        if alert is None:
+            return self._error_response(
+                request,
+                404,
+                "ALERT_NOT_FOUND",
+                "Alerta nao encontrado.",
+                retryable=False,
+            )
+        return Response(
+            200, {"alert": alert, "meta": self._meta(request).to_dict()}
         )
 
     def _read_market(self):
@@ -1262,6 +1470,24 @@ def _conversation_get_route(path: str) -> str | None:
         conversation_id = path[len(prefix) :]
         if conversation_id and "/" not in conversation_id:
             return conversation_id
+    return None
+
+
+def _opportunity_get_route(path: str) -> str | None:
+    prefix = "/v1/opportunities/"
+    if path.startswith(prefix):
+        opportunity_id = path[len(prefix) :]
+        if opportunity_id and "/" not in opportunity_id:
+            return opportunity_id
+    return None
+
+
+def _alert_patch_route(path: str) -> str | None:
+    prefix = "/v1/alerts/"
+    if path.startswith(prefix):
+        alert_id = path[len(prefix) :]
+        if alert_id and "/" not in alert_id:
+            return alert_id
     return None
 
 
