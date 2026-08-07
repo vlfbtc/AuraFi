@@ -82,6 +82,61 @@ struct SessionStore {
     }
 }
 
+struct PendingChatMessage: Codable, Equatable {
+    let id: String
+    let text: String
+}
+
+struct PersistedChatState: Codable, Equatable {
+    let conversationId: String?
+    let consent: ConversationConsent
+    let pendingMessages: [PendingChatMessage]
+}
+
+struct ChatStateStore {
+    private let service = "br.com.aurafi.app.conversation"
+    private let account = "conversation-resume-state"
+
+    func save(_ state: PersistedChatState) throws {
+        guard let data = try? JSONEncoder().encode(state) else { throw SessionStoreError.encoding }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+        var insert = query
+        insert[kSecValueData as String] = data
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(insert as CFDictionary, nil)
+        guard status == errSecSuccess else { throw SessionStoreError.keychain(status) }
+    }
+
+    func load() -> PersistedChatState? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data
+        else { return nil }
+        return try? JSONDecoder().decode(PersistedChatState.self, from: data)
+    }
+
+    func clear() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
 struct DecisionRecord: Identifiable, Codable, Equatable {
     enum Outcome: String, Codable { case saved, declined }
 

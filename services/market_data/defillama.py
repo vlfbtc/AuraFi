@@ -223,13 +223,13 @@ class UrllibHttpClient:
         with self._open(request, timeout=timeout_seconds) as response:  # noqa: S310
             content_type = response.headers.get_content_type()
             if content_type != "application/json":
-                raise MarketDataError("A DeFiLlama retornou um tipo de conteúdo inválido")
+                raise MarketDataError("A fonte externa retornou um tipo de conteúdo inválido")
             raw = response.read(self.max_response_bytes + 1)
             if len(raw) > self.max_response_bytes:
-                raise MarketDataError("A resposta da DeFiLlama excedeu o limite permitido")
+                raise MarketDataError("A resposta externa excedeu o limite permitido")
             payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, (Mapping, list, tuple)):
-            raise MarketDataError("A resposta da DeFiLlama não é um objeto/lista JSON")
+            raise MarketDataError("A resposta externa não é um objeto/lista JSON")
         return payload
 
 
@@ -295,6 +295,7 @@ class DeFiLlamaAdapter:
         ttl_seconds: float = 300.0,
         timeout_seconds: float = 5.0,
         cache_key: str = "defillama:market-data",
+        fx_base_url: str | None = None,
     ) -> None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds deve ser maior que zero")
@@ -310,6 +311,42 @@ class DeFiLlamaAdapter:
         self.ttl_seconds = ttl_seconds
         self.timeout_seconds = timeout_seconds
         self.cache_key = cache_key
+        # Import tardio evita ciclo: o enricher usa as portas definidas acima.
+        from .enrichment import MarketDetailEnricher
+
+        self.detail_enricher = MarketDetailEnricher(
+            defillama_base_url=base_url,
+            fx_base_url=fx_base_url,
+            http_client=self.http_client,
+            clock=self.clock,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def enrich_opportunity(
+        self, opportunity: NormalizedOpportunity, *, mode: ReadMode = "auto"
+    ) -> dict[str, Any]:
+        """Adiciona histórico e apresentação monetária ao detalhe, fail-soft."""
+        # Testes e composição da API podem substituir a porta HTTP após criar o
+        # adapter; mantemos o enricher apontando para a mesma porta efetiva.
+        self.detail_enricher.http_client = self.http_client
+        self.detail_enricher.defillama_base_url = self.base_url
+        return self.detail_enricher.enrich(
+            opportunity_id=opportunity.opportunity_id,
+            tvl_usd=opportunity.tvl_value,
+            mode=mode,
+        )
+
+    def currency_displays(
+        self,
+        opportunities: Sequence[NormalizedOpportunity],
+        *,
+        mode: ReadMode = "auto",
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Converte a listagem com uma única leitura/cache PTAX compartilhada."""
+        self.detail_enricher.http_client = self.http_client
+        return self.detail_enricher.currency_displays(
+            [item.tvl_value for item in opportunities], mode=mode
+        )
 
     def read(self, *, mode: ReadMode = "auto") -> MarketDataSnapshot:
         """Lê dados sem mutar a fonte; ``mode`` facilita testes determinísticos."""
@@ -348,6 +385,19 @@ class DeFiLlamaAdapter:
         return self.read(mode=mode)
 
     def get_opportunities(self, *, mode: ReadMode = "auto") -> MarketDataSnapshot:
+        return self.read(mode=mode)
+
+    def read_for_detail(self, *, mode: ReadMode = "auto") -> MarketDataSnapshot:
+        """Reutiliza snapshot live válido antes de reler a coleção completa.
+
+        Somente entradas gravadas por ``_read_live`` chegam ao cache. Fixtures
+        ``test``/``fallback`` nunca são persistidas e, portanto, nunca são
+        promovidas por este atalho.
+        """
+        if mode in {"auto", "live"}:
+            cached = self._read_cache()
+            if cached is not None and not cached.data_source.is_stale:
+                return cached
         return self.read(mode=mode)
 
     def _read_live(self) -> MarketDataSnapshot:
@@ -421,7 +471,10 @@ class DeFiLlamaAdapter:
             raise MarketDataError("A resposta da DeFiLlama não contém oportunidades")
         observed_at = _observed_at_from_payload(payload, items, self.schema, retrieved_at)
         if observed_at == retrieved_at and not freshness_note:
-            freshness_note = "Timestamp de observação ausente no payload externo; [LACUNA]."
+            freshness_note = (
+                "A fonte não informou o momento da observação; "
+                "o momento de recuperação foi usado como referência."
+            )
         metadata = DataSourceMetadata(
             source="defillama",
             mode=mode,

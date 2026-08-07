@@ -58,7 +58,12 @@ from services.identity import otp_delivery as otp_delivery_module
 from services.identity.otp_delivery import OtpDeliveryConfigurationError
 from services.identity.service import HmacOtpHasher, OtpDeliveryPort
 from services.identity.service import RequestContext
-from services.market_data import DeFiLlamaAdapter, MarketDataError
+from services.market_data import (
+    DeFiLlamaAdapter,
+    MarketDataError,
+    decorate_opportunity,
+    decorate_simulation,
+)
 from services.recommendation import (
     Opportunity,
     Recommendation,
@@ -79,6 +84,9 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MARKET_BASE_URL = "https://yields.llama.fi"
 DEFAULT_MARKET_ENDPOINT = "/pools"
+DEFAULT_FX_BASE_URL = (
+    "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata"
+)
 MAX_BODY_BYTES = 1_048_576
 PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production", "producao", "produção"})
 SUPPORTED_ENVIRONMENTS = PRODUCTION_ENVIRONMENTS | frozenset(
@@ -732,7 +740,12 @@ class AuraFiApp:
                 )
             if endpoint != "/pools":
                 raise ValueError("AURAFI_MARKET_ENDPOINT must be /pools")
-        return DeFiLlamaAdapter(base_url=base_url, endpoint=endpoint)
+        fx_base_url = DEFAULT_FX_BASE_URL if allow_network else None
+        return DeFiLlamaAdapter(
+            base_url=base_url,
+            endpoint=endpoint,
+            fx_base_url=fx_base_url,
+        )
 
     def handle(self, request: Request) -> Response:
         """Processa uma requisicao sem depender de um servidor HTTP."""
@@ -1000,15 +1013,25 @@ class AuraFiApp:
         query = request.query
         asset = query.get("asset", "").casefold()
         blockchain = query.get("blockchain", "").casefold()
-        items = [
-            item.to_dict()
+        filtered = [
+            item
             for item in snapshot.items
             if (not asset or item.asset.casefold() == asset)
             and (not blockchain or item.blockchain.casefold() == blockchain)
         ]
         page, page_size = _pagination(query)
         start = (page - 1) * page_size
-        page_items = items[start : start + page_size]
+        page_source_items = filtered[start : start + page_size]
+        displays = self.market.currency_displays(
+            page_source_items, mode=self.market_mode
+        )
+        page_items = []
+        for item, display in zip(page_source_items, displays, strict=True):
+            payload = item.to_dict()
+            payload["currency_display"] = display
+            # O BFF entrega valores prontos para exibição e higieniza sentinelas
+            # internas; o cliente apenas renderiza.
+            page_items.append(decorate_opportunity(payload))
         meta = self._meta(request).to_dict()
         meta["data_sources"] = [snapshot.data_source.to_dict()]
         return Response(
@@ -1018,8 +1041,8 @@ class AuraFiApp:
                 "pagination": {
                     "page": page,
                     "page_size": page_size,
-                    "total": len(items),
-                    "has_next": start + page_size < len(items),
+                    "total": len(filtered),
+                    "has_next": start + page_size < len(filtered),
                 },
                 "meta": meta,
             },
@@ -1050,13 +1073,14 @@ class AuraFiApp:
         simulation = self.simulation.simulate(simulation_input)
         meta = self._meta(request).to_dict()
         meta["data_sources"] = [opportunity.data_source.to_dict()]
-        return Response(201, {"simulation": simulation.to_dict(), "meta": meta})
+        # O BFF entrega os valores da simulação prontos para exibição.
+        return Response(201, {"simulation": decorate_simulation(simulation.to_dict()), "meta": meta})
 
     def _opportunity_detail(
         self, request: Request, opportunity_id: str
     ) -> Response:
         self._resolve(request)
-        snapshot = self._read_market()
+        snapshot = self._read_market(prefer_valid_cache=True)
         opportunity = next(
             (
                 item
@@ -1075,7 +1099,12 @@ class AuraFiApp:
             )
         meta = self._meta(request).to_dict()
         meta["data_sources"] = [snapshot.data_source.to_dict()]
-        return Response(200, {"opportunity": opportunity.to_dict(), "meta": meta})
+        detail = opportunity.to_dict()
+        detail.update(
+            self.market.enrich_opportunity(opportunity, mode=self.market_mode)
+        )
+        detail = decorate_opportunity(detail)
+        return Response(200, {"opportunity": detail, "meta": meta})
 
     def _recommendation(self, request: Request) -> Response:
         resolved = self._resolve(request)
@@ -1145,6 +1174,7 @@ class AuraFiApp:
                 "channel": "simulated",
                 "consent": message.consent.to_dict(),
                 "action": message.action,
+                "external_message_id": message.external_message_id,
                 "request_id": request.request_id,
                 "correlation_id": correlation_id,
             }
@@ -1236,11 +1266,15 @@ class AuraFiApp:
             200, {"alert": alert, "meta": self._meta(request).to_dict()}
         )
 
-    def _read_market(self):
+    def _read_market(self, *, prefer_valid_cache: bool = False):
         mode = self.market_mode
         if mode not in MARKET_MODES:
             mode = "live" if self.is_production else "test"
-        snapshot = self.market.read(mode=mode)
+        snapshot = (
+            self.market.read_for_detail(mode=mode)
+            if prefer_valid_cache
+            else self.market.read(mode=mode)
+        )
         if self.is_production and snapshot.data_source.mode in {"test", "fallback"}:
             raise MarketDataError(
                 "Dados sintéticos não podem ser servidos em produção"

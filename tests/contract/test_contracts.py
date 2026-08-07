@@ -96,6 +96,24 @@ class ContractStaticTests(unittest.TestCase):
         self.assertIn("RequestIdHeader", self.openapi)
         self.assertIn("CorrelationIdHeader", self.openapi)
 
+    def test_detalhe_documenta_historico_real_e_ptax_fail_soft(self) -> None:
+        detail = schema_block(self.openapi, "OpportunityDetail")
+        self.assertIn("required: [history, currency_display]", detail)
+        listing = schema_block(self.openapi, "OpportunityListItem")
+        self.assertIn("required: [currency_display]", listing)
+        history = schema_block(self.openapi, "OpportunityHistory")
+        self.assertIn("[available, unavailable]", history)
+        self.assertIn("7d:", history)
+        self.assertIn("30d:", history)
+        apy = schema_block(self.openapi, "ApyWindowMetrics")
+        for field in ("average", "minimum", "maximum", "change_percentage_points", "trend"):
+            self.assertIn(field, apy)
+        fx = schema_block(self.openapi, "FxQuote")
+        self.assertIn("enum: [bcb_ptax]", fx)
+        self.assertIn("enum: [midpoint_buy_sell]", fx)
+        self.assertIn("latest_closing_bulletin", fx)
+        self.assertIn("enum: [live, cache]", fx)
+
 
 if __name__ == "__main__":
     unittest.main()

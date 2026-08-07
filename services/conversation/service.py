@@ -30,6 +30,7 @@ from services.recommendation import (
     RecommendationService,
     RiskProfile,
 )
+from .redaction import redact_text
 
 
 ENVELOPE_VERSION = "1.0"
@@ -40,14 +41,14 @@ DEFAULT_DISCLAIMER = (
     "educativos; não constituem ordem, consultoria personalizada ou garantia "
     "de retorno e não executam alocações."
 )
-SUPPORTED_ACTIONS = frozenset({"ask_why", "simulate", "explain_risk", "request_human"})
+SUPPORTED_ACTIONS = frozenset({"ask_why", "simulate", "explain_risk", "compare", "request_human"})
 SUPPORTED_CONSENT_PURPOSES = frozenset(
     {"decision_support", "conversation", "memory", "analytics"}
 )
 SUPPORTED_CONSENT_STATUS = frozenset({"granted", "denied", "revoked"})
 
 ConversationStatus = Literal["active", "waiting_human", "closed"]
-MessageAction = Literal["ask_why", "simulate", "explain_risk", "request_human"]
+MessageAction = Literal["ask_why", "simulate", "explain_risk", "compare", "request_human"]
 LlmMode = Literal["mock", "provider"]
 LlmExplainability = Literal["structured", "unavailable"]
 FallbackKind = Literal["faq", "human_support"]
@@ -137,6 +138,8 @@ class LlmMetadata:
     fallback_used: bool = False
     escalation_flag: bool = False
     llm_available: bool = True
+    service_status: Literal["available", "fallback", "unavailable", "not_required"] = "available"
+    failure_code: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"mock", "provider"}:
@@ -145,6 +148,8 @@ class LlmMetadata:
             raise ValueError("provedor LLM inválido")
         if self.explainability not in {"structured", "unavailable"}:
             raise ValueError("nível de explicabilidade inválido")
+        if self.service_status not in {"available", "fallback", "unavailable", "not_required"}:
+            raise ValueError("estado do serviço LLM inválido")
         if not self.prompt_version.strip():
             raise ValueError("prompt_version é obrigatório")
 
@@ -160,6 +165,8 @@ class LlmMetadata:
             "fallback_used": self.fallback_used,
             "escalation_flag": self.escalation_flag,
             "llm_available": self.llm_available,
+            "service_status": self.service_status,
+            "failure_code": self.failure_code,
         }
 
 
@@ -263,10 +270,14 @@ class DeterministicFaq:
         if "wallet" in normalized or "carteira" in normalized:
             return "Wallet não é identidade no MVP. A conta AuraFi usa e-mail/OTP; não conectamos wallet nem executamos transações."
         if action == "simulate" or "simul" in normalized:
-            return "Posso gerar uma simulação educativa quando você informar oportunidade, valor, ativo e horizonte."
+            return "Para simular com segurança, informe a oportunidade, o valor hipotético, o ativo e o horizonte. A projeção usa premissas explícitas, não movimenta fundos e não garante retorno."
         if action in {"ask_why", "explain_risk"} or "risco" in normalized:
-            return "A explicação deve considerar dados observados, liquidez, riscos e a política vigente. Ela não representa garantia de retorno."
-        if action in {"recommend", "discover", "compare"} or any(term in normalized for term in ("recomend", "aloca", "investir", "oportunidade")):
+            return "Ao avaliar risco, confira contrato inteligente, liquidez, volatilidade do ativo, dependências do protocolo, auditorias e frescor dos dados. Risco desconhecido não significa risco baixo; esta explicação é educativa e não garante retorno."
+        if action == "compare" or any(term in normalized for term in ("compare", "comparar", "diferença")):
+            return "Para comparar alternativas, coloque lado a lado APY observado, TVL e liquidez, rede, exposição ao ativo, risco de contrato e data da fonte. Uma taxa maior isoladamente não torna uma alternativa melhor ou adequada ao seu perfil."
+        if "cash and carry" in normalized or "cash-and-carry" in normalized:
+            return "Cash-and-carry combina posições opostas no mercado à vista e em derivativos para observar um spread. Ainda há risco de contraparte, liquidação, funding, base, custódia e execução; a AuraFi apenas explica o conceito e não monta nem executa a estratégia."
+        if action in {"recommend", "discover"} or any(term in normalized for term in ("recomend", "aloca", "investir", "qual oportunidade")):
             return "Para sugerir uma oportunidade, é necessário um perfil de risco declarado e uma política de elegibilidade válida."
         return "Posso ajudar a entender oportunidades, riscos e simulações educativas. Não executo alocações."
 
@@ -293,6 +304,14 @@ class MessageRequest:
             raise ConversationInputError("Ação de mensagem inválida.", details={"field": "action"})
         consent = self.consent if isinstance(self.consent, Consent) else Consent.from_mapping(self.consent)
         object.__setattr__(self, "consent", consent)
+        if self.external_message_id is not None:
+            normalized_external_id = self.external_message_id.strip()
+            if not normalized_external_id or len(normalized_external_id) > 200:
+                raise ConversationInputError(
+                    "external_message_id deve ter entre 1 e 200 caracteres.",
+                    details={"field": "external_message_id"},
+                )
+            object.__setattr__(self, "external_message_id", normalized_external_id)
 
     @classmethod
     def from_mapping(
@@ -360,7 +379,7 @@ class AuditMetadata:
     source: str
     actor: Literal["user", "hub", "system", "human_support"]
     trace_id: str
-    redaction: Literal["applied", "not_required"] = "applied"
+    redaction: Literal["applied", "not_required"] = "not_required"
     llm: Mapping[str, Any] = field(default_factory=dict)
     data_sources: tuple[Mapping[str, Any], ...] = ()
     schema_version: str = CONVERSATION_SCHEMA_VERSION
@@ -593,6 +612,17 @@ class ConversationConsentError(ConversationError):
         super().__init__("Consentimento de conversa ativo é obrigatório.", code=self.code, retryable=False)
 
 
+class ConversationMessageProcessingError(ConversationError):
+    code = "MESSAGE_PROCESSING"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Uma mensagem com este external_message_id já está em processamento.",
+            code=self.code,
+            retryable=True,
+        )
+
+
 class WalletIdentityError(ConversationError):
     code = "WALLET_IDENTITY_NOT_SUPPORTED"
 
@@ -649,6 +679,7 @@ class ConversationService:
         self._faq = faq or DeterministicFaq()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._id_factory = id_factory or _new_id
+        self._message_lock = threading.RLock()
         self._disclaimer = disclaimer.strip()
         self._prompt_version = prompt_version.strip()
         if not self._disclaimer or not self._prompt_version:
@@ -763,34 +794,158 @@ class ConversationService:
         correlation_id: str | None = None,
         channel_identity_id: str | None = None,
     ) -> MessageResponse:
-        conversation = self._repository.get(conversation_id)
-        if conversation is None:
-            raise ConversationNotFoundError()
-        message_request = self._coerce_message_request(
-            request,
-            text=text,
-            channel=channel or conversation.channel,
-            consent=consent or conversation.consent,
-            action=action,
-            simulation=simulation,
-        )
-        resolved = self._resolve(
-            access_token,
-            channel=message_request.channel,
-            request_id=request_id,
-            correlation_id=correlation_id or conversation.correlation_id,
-            channel_identity_id=channel_identity_id,
-        )
-        self._authorize(conversation, resolved)
-        _require_same_consent(conversation.consent, message_request.consent)
-        _require_consent(message_request.consent)
-        updated, response = self._append_message(conversation, resolved, message_request, now=self._now())
-        self._repository.update(updated)
-        return response
+        # Serializa compare-and-append no processo. O adapter persistente ainda
+        # mantém sua própria transação; assim retries concorrentes não chamam o
+        # provedor duas vezes para o mesmo external_message_id.
+        with self._message_lock:
+            conversation = self._repository.get(conversation_id)
+            if conversation is None:
+                raise ConversationNotFoundError()
+            message_request = self._coerce_message_request(
+                request,
+                text=text,
+                channel=channel or conversation.channel,
+                consent=consent or conversation.consent,
+                action=action,
+                simulation=simulation,
+            )
+            resolved = self._resolve(
+                access_token,
+                channel=message_request.channel,
+                request_id=request_id,
+                correlation_id=correlation_id or conversation.correlation_id,
+                channel_identity_id=channel_identity_id,
+            )
+            self._authorize(conversation, resolved)
+            _require_same_consent(conversation.consent, message_request.consent)
+            _require_consent(message_request.consent)
+            if message_request.external_message_id:
+                replay = self._idempotent_replay(conversation, message_request.external_message_id, resolved.meta)
+                if replay is not None:
+                    return replay
+            claim_token: str | None = None
+            if message_request.external_message_id:
+                claim = getattr(self._repository, "claim_external_message", None)
+                if callable(claim):
+                    claim_result = claim(
+                        conversation_id,
+                        message_request.external_message_id,
+                    )
+                    status = str(claim_result.get("status", "processing"))
+                    if status == "completed":
+                        current = self._repository.get(conversation_id)
+                        replay = (
+                            self._idempotent_replay(
+                                current,
+                                message_request.external_message_id,
+                                resolved.meta,
+                            )
+                            if current is not None
+                            else None
+                        )
+                        if replay is not None:
+                            return replay
+                    if status != "claimed":
+                        raise ConversationMessageProcessingError()
+                    claim_token = str(claim_result["claim_token"])
+            try:
+                updated, response = self._append_message(
+                    conversation,
+                    resolved,
+                    message_request,
+                    now=self._now(),
+                )
+                if claim_token is not None and message_request.external_message_id:
+                    commit = getattr(self._repository, "commit_claimed_message", None)
+                    if not callable(commit):
+                        raise RuntimeError("repository idempotente sem commit atômico")
+                    commit(
+                        updated,
+                        message_request.external_message_id,
+                        claim_token,
+                    )
+                else:
+                    self._repository.update(updated)
+                return response
+            except Exception:
+                if claim_token is not None and message_request.external_message_id:
+                    release = getattr(self._repository, "release_external_message", None)
+                    if callable(release):
+                        release(
+                            conversation_id,
+                            message_request.external_message_id,
+                            claim_token,
+                        )
+                raise
+
+    def replay_message(
+        self,
+        access_token: str,
+        conversation_id: str,
+        request: MessageRequest,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> MessageResponse | None:
+        """Consulta replay autenticado sem invocar provider nem consumir rate limit."""
+
+        if not request.external_message_id:
+            return None
+        with self._message_lock:
+            conversation = self._repository.get(conversation_id)
+            if conversation is None:
+                raise ConversationNotFoundError()
+            resolved = self._resolve(
+                access_token,
+                channel=request.channel,
+                request_id=request_id,
+                correlation_id=correlation_id or conversation.correlation_id,
+            )
+            self._authorize(conversation, resolved)
+            _require_same_consent(conversation.consent, request.consent)
+            _require_consent(request.consent)
+            return self._idempotent_replay(
+                conversation,
+                request.external_message_id,
+                resolved.meta,
+            )
 
     # Common naming for channel adapters.
     handle_message = send_message
     process_message = send_message
+
+    @staticmethod
+    def _idempotent_replay(
+        conversation: ConversationRecord,
+        external_message_id: str,
+        meta: ApiMeta,
+    ) -> MessageResponse | None:
+        """Reproduz o par original sem chamar provedor nem persistir novamente."""
+
+        for index, message in enumerate(conversation.messages):
+            if message.message_type != "user_message" or message.channel.external_message_id != external_message_id:
+                continue
+            assistant = next(
+                (candidate for candidate in conversation.messages[index + 1 :] if candidate.message_type == "assistant_message"),
+                None,
+            )
+            if assistant is None:
+                return None
+            llm = dict(assistant.payload.get("llm", {}))
+            return MessageResponse(
+                message,
+                assistant,
+                meta,
+                {
+                    "idempotent_replay": True,
+                    "fallback_used": bool(assistant.payload.get("fallback_used", False)),
+                    "escalation_flag": bool(assistant.payload.get("escalation_flag", False)),
+                    "service_status": llm.get("service_status", "not_required"),
+                    "failure_code": llm.get("failure_code"),
+                    "llm": llm,
+                },
+            )
+        return None
 
     def _append_message(
         self,
@@ -802,12 +957,14 @@ class ConversationService:
     ) -> tuple[ConversationRecord, MessageResponse]:
         if conversation.status == "closed":
             raise ConversationError("A conversa está encerrada.", code="CONVERSATION_CLOSED", retryable=False)
+        redacted_user = redact_text(request.text, max_length=4_000)
+        safe_request = replace(request, text=redacted_user.text)
         channel = ChannelContext.from_value(
             request.channel,
             external_message_id=request.external_message_id,
         )
-        action = request.action or _infer_action(request.text)
-        user_payload: dict[str, Any] = {"text": request.text}
+        action = safe_request.action or _infer_action(safe_request.text)
+        user_payload: dict[str, Any] = {"text": safe_request.text}
         if action:
             user_payload["action"] = action
         user_message = self._envelope(
@@ -820,10 +977,12 @@ class ConversationService:
             actor="user",
             occurred_at=now,
             llm={},
+            redaction="applied" if redacted_user.applied else "not_required",
         )
-        assistant = self._answer(conversation, resolved, request, action)
+        assistant = self._answer(conversation, resolved, safe_request, action)
+        redacted_assistant = redact_text(assistant.text, max_length=4_000)
         assistant_payload = dict(assistant.payload)
-        assistant_payload["text"] = assistant.text
+        assistant_payload["text"] = redacted_assistant.text
         assistant_payload["fallback_used"] = assistant.llm.fallback_used
         assistant_payload["escalation_flag"] = assistant.llm.escalation_flag
         assistant_payload["llm"] = assistant.llm.to_dict()
@@ -838,6 +997,7 @@ class ConversationService:
             occurred_at=now,
             llm=assistant.llm.to_dict(),
             data_sources=assistant.data_sources,
+            redaction="applied" if redacted_assistant.applied else "not_required",
         )
         updated = replace(
             conversation,
@@ -852,6 +1012,8 @@ class ConversationService:
         metadata = {
             "fallback_used": assistant.llm.fallback_used,
             "escalation_flag": assistant.llm.escalation_flag,
+            "service_status": assistant.llm.service_status,
+            "failure_code": assistant.llm.failure_code,
             "llm": assistant.llm.to_dict(),
         }
         return updated, MessageResponse(user_message, assistant_message, resolved.meta, metadata)
@@ -873,8 +1035,10 @@ class ConversationService:
             )
         if action in {"simulate"}:
             return self._answer_simulation(request)
-        if action in {"ask_why", "explain_risk", "recommend", "discover", "compare"}:
+        if action in {"recommend", "discover"}:
             return self._answer_recommendation(resolved, conversation, request, action)
+        # Explicar, comparar critérios e responder perguntas educativas não
+        # depende de suitability. A política só governa sugestões pessoais.
         return self._answer_llm(resolved, conversation, request, action)
 
     def _answer_llm(
@@ -928,10 +1092,21 @@ class ConversationService:
             )
         except Exception as exc:
             text = self._faq_answer(request.text, action=action)
+            failure_code = _llm_failure_code(exc)
             return _AssistantResult(
                 text=_sanitize(text),
-                payload={"kind": "faq", "fallback_reason": type(exc).__name__, "escalation_available": True},
-                llm=self._metadata(fallback="faq", fallback_used=True, llm_available=False),
+                payload={
+                    "kind": "educational_fallback",
+                    "fallback_reason": failure_code,
+                    "service_status": "unavailable",
+                    "escalation_available": True,
+                },
+                llm=self._metadata(
+                    fallback="faq",
+                    fallback_used=True,
+                    llm_available=False,
+                    failure_code=failure_code,
+                ),
             )
 
     def _answer_recommendation(
@@ -968,8 +1143,14 @@ class ConversationService:
             )
             return _AssistantResult(
                 text=_sanitize(reason),
-                payload={**payload, "kind": "pending", "pending": True},
-                llm=self._metadata(fallback="faq", fallback_used=True),
+                payload={
+                    **payload,
+                    "kind": "recommendation_pending",
+                    "pending": True,
+                    "blocker": "PROFILE_REQUIRED" if profile is None or not profile.is_declared else "ELIGIBILITY_POLICY_REQUIRED",
+                    "service_status": "not_required",
+                },
+                llm=self._metadata(service_status="not_required"),
                 data_sources=data_sources,
             )
         if not recommendation.items:
@@ -986,7 +1167,16 @@ class ConversationService:
 
     def _answer_simulation(self, request: MessageRequest) -> _AssistantResult:
         if self._simulation is None or request.simulation is None:
-            return self._pending_answer(request.text, "Para simular, informe oportunidade, valor, ativo e horizonte.")
+            return _AssistantResult(
+                text="Para simular, informe oportunidade, valor hipotético, ativo e horizonte. Nenhuma operação será executada.",
+                payload={
+                    "kind": "simulation_input_required",
+                    "pending": True,
+                    "required_inputs": ["opportunity_id", "amount", "asset", "horizons_days"],
+                    "service_status": "not_required",
+                },
+                llm=self._metadata(service_status="not_required"),
+            )
         try:
             simulation = self._simulation.simulate(request.simulation)
             payload = {"kind": "simulation", "simulation": simulation.to_dict() if hasattr(simulation, "to_dict") else dict(simulation)}
@@ -998,8 +1188,12 @@ class ConversationService:
         except Exception as exc:
             return _AssistantResult(
                 text=_sanitize(self._faq_answer(request.text, action="simulate")),
-                payload={"kind": "faq", "fallback_reason": type(exc).__name__},
-                llm=self._metadata(fallback="faq", fallback_used=True),
+                payload={
+                    "kind": "simulation_fallback",
+                    "fallback_reason": "SIMULATION_INPUT_INVALID",
+                    "service_status": "not_required",
+                },
+                llm=self._metadata(fallback="faq", fallback_used=True, service_status="not_required"),
             )
 
     def _pending_answer(self, original_text: str, reason: str) -> _AssistantResult:
@@ -1022,6 +1216,7 @@ class ConversationService:
         occurred_at: datetime,
         llm: Mapping[str, Any],
         data_sources: Sequence[Mapping[str, Any]] = (),
+        redaction: Literal["applied", "not_required"] = "not_required",
     ) -> MessageEnvelope:
         return MessageEnvelope(
             envelope_version=ENVELOPE_VERSION,
@@ -1040,7 +1235,7 @@ class ConversationService:
                 source="hub",
                 actor=actor,
                 trace_id=resolved.meta.correlation_id,
-                redaction="applied",
+                redaction=redaction,
                 llm=llm,
                 data_sources=tuple(data_sources),
             ),
@@ -1053,7 +1248,16 @@ class ConversationService:
         fallback_used: bool = False,
         escalation_flag: bool = False,
         llm_available: bool = True,
+        failure_code: str | None = None,
+        service_status: Literal["available", "fallback", "unavailable", "not_required"] | None = None,
     ) -> LlmMetadata:
+        resolved_status = service_status or (
+            "unavailable"
+            if not llm_available
+            else "fallback"
+            if fallback_used
+            else "not_required"
+        )
         return LlmMetadata(
             mode="mock",
             provider="mock",
@@ -1063,6 +1267,8 @@ class ConversationService:
             fallback_used=fallback_used,
             escalation_flag=escalation_flag,
             llm_available=llm_available,
+            service_status=resolved_status,
+            failure_code=failure_code,
         )
 
     def _call_llm(self, request: LlmRequest) -> LlmResult | str:
@@ -1221,9 +1427,25 @@ def _infer_action(text: str) -> str | None:
         return "simulate"
     if any(term in normalized for term in ("por que", "porque", "risco", "explica o risco", "explicar risco")):
         return "explain_risk"
-    if any(term in normalized for term in ("recomend", "aloca", "investir", "oportunidade", "compare")):
+    if any(term in normalized for term in ("compare", "comparar", "diferença")):
+        return "compare"
+    if any(term in normalized for term in ("recomend", "aloca", "onde investir", "qual oportunidade")):
         return "recommend"
     return None
+
+
+def _llm_failure_code(error: Exception) -> str:
+    """Classifica a degradação sem expor exceção, credencial ou fornecedor."""
+
+    name = type(error).__name__.casefold()
+    message = str(error).casefold()
+    if "unsafe provider output" in message:
+        return "LLM_OUTPUT_REJECTED"
+    if "timeout" in name or "timeout" in message or "timed out" in message:
+        return "LLM_TIMEOUT"
+    if "rate" in message or "429" in message or "limit" in message:
+        return "LLM_RATE_LIMITED"
+    return "LLM_UNAVAILABLE"
 
 
 _GUARANTEE_PATTERNS = (

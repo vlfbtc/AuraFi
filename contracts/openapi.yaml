@@ -891,7 +891,13 @@ components:
           description: Indica que o snapshot pode estar desatualizado.
         freshness_note:
           type: string
-          description: Explicação em pt-BR para cache, fallback ou atraso.
+          description: Explicação em pt-BR para cache, fallback ou atraso. Sentinelas internas nunca são expostas.
+        source_label:
+          type: string
+          description: Rótulo de fonte pronto para exibição (ex.: "DeFiLlama"). Ausente quando não há fonte utilizável.
+        status_label:
+          type: string
+          description: Rótulo de estado pronto para exibição (ex.: "Dados atualizados", "Atualização pendente").
     LlmMetadata:
       type: object
       required: [mode, mockable, explainability]
@@ -1074,6 +1080,222 @@ components:
           $ref: '#/components/schemas/ApiMeta'
     ProfileResponse:
       $ref: '#/components/schemas/Profile'
+    MoneyValue:
+      type: object
+      required: [value, currency]
+      properties:
+        value:
+          type: number
+          format: double
+          minimum: 0
+        currency:
+          type: string
+          enum: [BRL, USD]
+        display:
+          type: string
+          description: Valor completo pronto para exibição em pt-BR (ex.: "R$ 88.000.000.000,00").
+        display_compact:
+          type: string
+          description: Valor abreviado pronto para exibição em pt-BR (ex.: "R$ 88,0 bi").
+    FxQuote:
+      type: object
+      required: [status, source, retrieved_at, is_stale]
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable]
+        source:
+          type: string
+          enum: [bcb_ptax]
+        base_currency:
+          type: string
+          enum: [USD]
+        quote_currency:
+          type: string
+          enum: [BRL]
+        rate:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+          description: Taxa USD/BRL calculada pela média entre compra e venda PTAX.
+        rate_method:
+          type: string
+          enum: [midpoint_buy_sell]
+        quote_selection:
+          type: string
+          enum: [latest_closing_bulletin, latest_available_bulletin]
+          description: Prioriza o boletim PTAX de fechamento mais recente no período consultado.
+        buy_rate:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+        sell_rate:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+        bulletin_type:
+          type: string
+        mode:
+          type: string
+          enum: [live, cache]
+        observed_at:
+          type: string
+          format: date-time
+        retrieved_at:
+          type: string
+          format: date-time
+        cache_expires_at:
+          type: string
+          format: date-time
+        is_stale:
+          type: boolean
+        freshness_note:
+          type: string
+    CurrencyDisplay:
+      type: object
+      required: [primary, secondary, fx]
+      properties:
+        primary:
+          $ref: '#/components/schemas/MoneyValue'
+        secondary:
+          allOf:
+            - $ref: '#/components/schemas/MoneyValue'
+          nullable: true
+        fx:
+          $ref: '#/components/schemas/FxQuote'
+    OpportunityHistoryPoint:
+      type: object
+      required: [observed_at]
+      properties:
+        observed_at:
+          type: string
+          format: date-time
+        apy_percent:
+          type: number
+          format: double
+        tvl_usd:
+          type: number
+          format: double
+          minimum: 0
+    ApyWindowMetrics:
+      type: object
+      required: [average, minimum, maximum, first, latest, change_percentage_points, trend]
+      properties:
+        average:
+          type: number
+          format: double
+        minimum:
+          type: number
+          format: double
+        maximum:
+          type: number
+          format: double
+        first:
+          type: number
+          format: double
+        latest:
+          type: number
+          format: double
+        change_percentage_points:
+          type: number
+          format: double
+        trend:
+          type: string
+          enum: [up, down, flat]
+          description: Direção derivada de latest menos first, sem projeção.
+    TvlWindowMetrics:
+      type: object
+      required: [first, latest, change, change_percent]
+      properties:
+        first:
+          type: number
+          format: double
+          minimum: 0
+        latest:
+          type: number
+          format: double
+          minimum: 0
+        change:
+          type: number
+          format: double
+        change_percent:
+          type: number
+          format: double
+          nullable: true
+    OpportunityHistoryWindow:
+      type: object
+      required: [window_days, point_count, observed_from, observed_to, apy, tvl_usd]
+      properties:
+        window_days:
+          type: integer
+          enum: [7, 30]
+        point_count:
+          type: integer
+          minimum: 1
+        observed_from:
+          type: string
+          format: date-time
+        observed_to:
+          type: string
+          format: date-time
+        apy:
+          allOf:
+            - $ref: '#/components/schemas/ApyWindowMetrics'
+          nullable: true
+        tvl_usd:
+          allOf:
+            - $ref: '#/components/schemas/TvlWindowMetrics'
+          nullable: true
+    OpportunityHistorySource:
+      type: object
+      required: [source, dataset, mode, retrieved_at, is_stale]
+      properties:
+        source:
+          type: string
+          enum: [defillama]
+        dataset:
+          type: string
+          enum: [pool_chart]
+        mode:
+          type: string
+          enum: [live, cache, unavailable]
+        observed_at:
+          type: string
+          format: date-time
+        retrieved_at:
+          type: string
+          format: date-time
+        cache_expires_at:
+          type: string
+          format: date-time
+        is_stale:
+          type: boolean
+        freshness_note:
+          type: string
+    OpportunityHistory:
+      type: object
+      required: [status, points, windows, data_source]
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable]
+        points:
+          type: array
+          description: Pontos reais de até 30 dias, encerrados na observação mais recente.
+          items:
+            $ref: '#/components/schemas/OpportunityHistoryPoint'
+        windows:
+          type: object
+          properties:
+            7d:
+              $ref: '#/components/schemas/OpportunityHistoryWindow'
+            30d:
+              $ref: '#/components/schemas/OpportunityHistoryWindow'
+        data_source:
+          $ref: '#/components/schemas/OpportunityHistorySource'
     Opportunity:
       type: object
       required:
@@ -1113,6 +1335,9 @@ components:
             observed_at:
               type: string
               format: date-time
+            display:
+              type: string
+              description: APY pronto para exibição em pt-BR (ex.: "2,20% a.a."). Formatado pelo BFF.
         tvl:
           type: object
           required: [value, currency, observed_at]
@@ -1126,6 +1351,12 @@ components:
             observed_at:
               type: string
               format: date-time
+            display:
+              type: string
+              description: TVL completo pronto para exibição em pt-BR (ex.: "US$ 1.200.000.000,00").
+            display_compact:
+              type: string
+              description: TVL abreviado pronto para exibição em pt-BR (ex.: "US$ 17,6 bi").
         liquidity:
           type: object
           required: [level, observed_at]
@@ -1173,8 +1404,19 @@ components:
               type: string
         data_source:
           $ref: '#/components/schemas/DeFiDataSource'
+        history:
+          description: Série e métricas presentes no endpoint de detalhe.
+          $ref: '#/components/schemas/OpportunityHistory'
+        currency_display:
+          description: BRL primário quando PTAX está disponível; USD permanece secundário. Presente na listagem e no detalhe.
+          $ref: '#/components/schemas/CurrencyDisplay'
         disclaimer:
           type: string
+    OpportunityListItem:
+      allOf:
+        - $ref: '#/components/schemas/Opportunity'
+        - type: object
+          required: [currency_display]
     OpportunityListResponse:
       type: object
       required: [items, pagination, meta]
@@ -1182,17 +1424,22 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/Opportunity'
+            $ref: '#/components/schemas/OpportunityListItem'
         pagination:
           $ref: '#/components/schemas/Pagination'
         meta:
           $ref: '#/components/schemas/ApiMeta'
+    OpportunityDetail:
+      allOf:
+        - $ref: '#/components/schemas/Opportunity'
+        - type: object
+          required: [history, currency_display]
     OpportunityResponse:
       type: object
       required: [opportunity, meta]
       properties:
         opportunity:
-          $ref: '#/components/schemas/Opportunity'
+          $ref: '#/components/schemas/OpportunityDetail'
         meta:
           $ref: '#/components/schemas/ApiMeta'
     SimulationInput:
@@ -1206,6 +1453,10 @@ components:
           format: double
           minimum: 0
           exclusiveMinimum: true
+        amount_display:
+          type: string
+          readOnly: true
+          description: Aporte pronto para exibição em pt-BR (ex.: "500 STETH"). Presente apenas na resposta; formatado pelo BFF.
         asset:
           type: string
         horizons_days:
@@ -1240,12 +1491,30 @@ components:
               projected_value:
                 type: number
                 format: double
+                description: Valor total projetado (principal + ganho), no ativo.
+              projected_value_display:
+                type: string
+                description: Valor total projetado pronto para exibição em pt-BR (ex.: "500,90 STETH"). Formatado pelo BFF.
               projected_yield:
                 type: number
                 format: double
+                description: Percentual acumulado do cenário (não é montante).
+              projected_yield_display:
+                type: string
+                description: Percentual acumulado pronto para exibição em pt-BR (ex.: "0,18%").
+              projected_gain:
+                type: number
+                format: double
+                description: Ganho em montante (projected_value - principal), derivado pelo BFF.
+              projected_gain_display:
+                type: string
+                description: Ganho em montante pronto para exibição em pt-BR (ex.: "0,9 STETH").
               idle_stablecoin_value:
                 type: number
                 format: double
+              idle_stablecoin_value_display:
+                type: string
+                description: Valor ocioso comparativo pronto para exibição em pt-BR.
               currency:
                 type: string
         assumptions:

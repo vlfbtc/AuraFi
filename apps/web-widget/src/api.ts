@@ -88,6 +88,9 @@ export interface DataSource {
   readOnly: true;
   isStale: boolean;
   freshnessNote?: string;
+  // Rótulos prontos para exibição fornecidos pelo BFF (já higienizados).
+  sourceLabel?: string;
+  statusLabel?: string;
 }
 
 export interface Opportunity {
@@ -96,8 +99,8 @@ export interface Opportunity {
   pool: string;
   asset: string;
   blockchain: string;
-  apy: { value: number; unit: 'percent_annualized'; observedAt: string };
-  tvl: { value: number; currency: string; observedAt: string };
+  apy: { value: number; unit: 'percent_annualized'; observedAt: string; display?: string };
+  tvl: { value: number; currency: string; observedAt: string; display?: string; displayCompact?: string };
   liquidity: { level: OpportunityRisk; observedAt: string };
   auditStatus?: AuditStatus;
   risk: { score: number; level: OpportunityRisk; dimensions: string[] };
@@ -124,6 +127,8 @@ export interface SimulationInput {
   asset: string;
   horizonsDays: SimulationHorizon[];
   compareIdleStablecoin?: boolean;
+  // Presente apenas na resposta; formatado pelo BFF.
+  amountDisplay?: string;
 }
 
 export interface SimulationData {
@@ -136,6 +141,11 @@ export interface SimulationData {
     projectedYield: number;
     idleStablecoinValue?: number;
     currency: string;
+    projectedGain?: number;
+    projectedValueDisplay?: string;
+    projectedYieldDisplay?: string;
+    projectedGainDisplay?: string;
+    idleStablecoinValueDisplay?: string;
   }>;
   assumptions: string[];
   generatedAt: string;
@@ -363,8 +373,8 @@ interface RawOpportunity {
   pool: string;
   asset: string;
   blockchain: string;
-  apy: { value: number; unit: 'percent_annualized'; observed_at: string };
-  tvl: { value: number; currency: string; observed_at: string };
+  apy: { value: number; unit: 'percent_annualized'; observed_at: string; display?: string };
+  tvl: { value: number; currency: string; observed_at: string; display?: string; display_compact?: string };
   liquidity: { level: OpportunityRisk; observed_at: string };
   risk: { score: number; level: OpportunityRisk; dimensions: string[] };
   audit_status?: AuditStatus;
@@ -376,6 +386,8 @@ interface RawOpportunity {
     read_only: true;
     is_stale: boolean;
     freshness_note?: string;
+    source_label?: string;
+    status_label?: string;
   };
   disclaimer: string;
 }
@@ -394,8 +406,19 @@ const toOpportunity = (raw: RawOpportunity): Opportunity => ({
   pool: raw.pool,
   asset: raw.asset,
   blockchain: raw.blockchain,
-  apy: { ...raw.apy, observedAt: raw.apy.observed_at },
-  tvl: { ...raw.tvl, observedAt: raw.tvl.observed_at },
+  apy: {
+    value: raw.apy.value,
+    unit: raw.apy.unit,
+    observedAt: raw.apy.observed_at,
+    ...(raw.apy.display ? { display: raw.apy.display } : {}),
+  },
+  tvl: {
+    value: raw.tvl.value,
+    currency: raw.tvl.currency,
+    observedAt: raw.tvl.observed_at,
+    ...(raw.tvl.display ? { display: raw.tvl.display } : {}),
+    ...(raw.tvl.display_compact ? { displayCompact: raw.tvl.display_compact } : {}),
+  },
   liquidity: { ...raw.liquidity, observedAt: raw.liquidity.observed_at },
   risk: raw.risk,
   disclaimer: raw.disclaimer,
@@ -407,6 +430,8 @@ const toOpportunity = (raw: RawOpportunity): Opportunity => ({
     readOnly: raw.data_source.read_only,
     isStale: raw.data_source.is_stale,
     ...(raw.data_source.freshness_note ? { freshnessNote: raw.data_source.freshness_note } : {}),
+    ...(raw.data_source.source_label ? { sourceLabel: raw.data_source.source_label } : {}),
+    ...(raw.data_source.status_label ? { statusLabel: raw.data_source.status_label } : {}),
   },
   ...(raw.audit_status ? { auditStatus: raw.audit_status } : {}),
 });
@@ -419,6 +444,8 @@ const toDataSource = (raw: RawOpportunity['data_source']): DataSource => ({
   readOnly: raw.read_only,
   isStale: raw.is_stale,
   ...(raw.freshness_note ? { freshnessNote: raw.freshness_note } : {}),
+  ...(raw.source_label ? { sourceLabel: raw.source_label } : {}),
+  ...(raw.status_label ? { statusLabel: raw.status_label } : {}),
 });
 
 const toMeta = (raw: RawMeta | undefined, response: Response, requested: RequestContext, source: ApiMeta['source']): ApiMeta => ({
@@ -679,19 +706,31 @@ const makeFixtureSimulation = (input: SimulationInput): SimulationData => {
 };
 
 const toSimulation = (value: unknown): SimulationData => {
-  const raw = value as { simulation: { simulation_id: string; opportunity_id: string; input: { opportunity_id: string; amount: number; asset: string; horizons_days: SimulationHorizon[]; compare_idle_stablecoin?: boolean }; scenarios: Array<{ horizon_days: SimulationHorizon; projected_value: number; projected_yield: number; idle_stablecoin_value?: number; currency: string }>; assumptions: string[]; generated_at?: string; data_source?: RawOpportunity['data_source']; execution_supported: false; disclaimer: string } };
+  const raw = value as { simulation: { simulation_id: string; opportunity_id: string; input: { opportunity_id: string; amount: number; asset: string; horizons_days: SimulationHorizon[]; compare_idle_stablecoin?: boolean; amount_display?: string }; scenarios: Array<{ horizon_days: SimulationHorizon; projected_value: number; projected_yield: number; idle_stablecoin_value?: number; currency: string; projected_gain?: number; projected_value_display?: string; projected_yield_display?: string; projected_gain_display?: string; idle_stablecoin_value_display?: string }>; assumptions: string[]; generated_at?: string; data_source?: RawOpportunity['data_source']; execution_supported: false; disclaimer: string } };
   const input: SimulationInput = {
     opportunityId: raw.simulation.input.opportunity_id,
     amount: raw.simulation.input.amount,
     asset: raw.simulation.input.asset,
     horizonsDays: raw.simulation.input.horizons_days,
     ...(raw.simulation.input.compare_idle_stablecoin === undefined ? {} : { compareIdleStablecoin: raw.simulation.input.compare_idle_stablecoin }),
+    ...(raw.simulation.input.amount_display ? { amountDisplay: raw.simulation.input.amount_display } : {}),
   };
   const simulation: SimulationData = {
     simulationId: raw.simulation.simulation_id,
     opportunityId: raw.simulation.opportunity_id,
     input,
-    scenarios: raw.simulation.scenarios.map((scenario) => ({ horizonDays: scenario.horizon_days, projectedValue: scenario.projected_value, projectedYield: scenario.projected_yield, currency: scenario.currency, ...(scenario.idle_stablecoin_value === undefined ? {} : { idleStablecoinValue: scenario.idle_stablecoin_value }) })),
+    scenarios: raw.simulation.scenarios.map((scenario) => ({
+      horizonDays: scenario.horizon_days,
+      projectedValue: scenario.projected_value,
+      projectedYield: scenario.projected_yield,
+      currency: scenario.currency,
+      ...(scenario.idle_stablecoin_value === undefined ? {} : { idleStablecoinValue: scenario.idle_stablecoin_value }),
+      ...(scenario.projected_gain === undefined ? {} : { projectedGain: scenario.projected_gain }),
+      ...(scenario.projected_value_display ? { projectedValueDisplay: scenario.projected_value_display } : {}),
+      ...(scenario.projected_yield_display ? { projectedYieldDisplay: scenario.projected_yield_display } : {}),
+      ...(scenario.projected_gain_display ? { projectedGainDisplay: scenario.projected_gain_display } : {}),
+      ...(scenario.idle_stablecoin_value_display ? { idleStablecoinValueDisplay: scenario.idle_stablecoin_value_display } : {}),
+    })),
     assumptions: raw.simulation.assumptions,
     generatedAt: raw.simulation.generated_at ?? new Date().toISOString(),
     executionSupported: raw.simulation.execution_supported,

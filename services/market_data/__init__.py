@@ -17,6 +17,8 @@ from .defillama import (
     SystemClock,
     UrllibHttpClient,
 )
+from .enrichment import MarketDetailEnricher
+from .presentation import decorate_opportunity, decorate_simulation
 
 __all__ = [
     "CacheEntry",
@@ -30,8 +32,11 @@ __all__ = [
     "InMemoryCache",
     "MarketDataError",
     "MarketDataSnapshot",
+    "MarketDetailEnricher",
     "NormalizedOpportunity",
     "SyntheticFallback",
     "SystemClock",
     "UrllibHttpClient",
+    "decorate_opportunity",
+    "decorate_simulation",
 ]

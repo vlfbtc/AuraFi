@@ -10,13 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import os
-import re
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .service import LlmRequest, LlmResult, PROMPT_VERSION
+from .redaction import redact_text
 
 
 DEFAULT_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -31,31 +31,13 @@ Não invente APY, TVL, auditoria, risco, saldo ou resultado de simulação. Quan
 faltarem dados verificáveis, diga isso claramente. Recomendações e simulações são
 produzidas por serviços determinísticos separados, nunca por esta conversa."""
 
-_EMAIL_PATTERN = re.compile(
-    r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b",
-    re.IGNORECASE,
-)
-_WALLET_PATTERN = re.compile(r"\b0x[a-f0-9]{40}\b", re.IGNORECASE)
-_SECRET_PATTERN = re.compile(
-    r"\b(?:sk-ant-[a-z0-9_-]+|re_[a-z0-9_-]{12,}|[0-9]{6})\b",
-    re.IGNORECASE,
-)
-
-
-def _redact_text(value: Any) -> str:
-    text = str(value).strip()[:4_000]
-    text = _EMAIL_PATTERN.sub("[email removido]", text)
-    text = _WALLET_PATTERN.sub("[endereço removido]", text)
-    return _SECRET_PATTERN.sub("[segredo removido]", text)
-
-
 def _conversation_messages(request: LlmRequest) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for item in request.context[-12:]:
         role = str(item.get("role", "")).casefold()
         if role not in {"user", "assistant"}:
             continue
-        text = _redact_text(item.get("text", ""))
+        text = redact_text(item.get("text", ""), max_length=4_000).text
         if not text:
             continue
         if messages and messages[-1]["role"] == role:
@@ -64,7 +46,7 @@ def _conversation_messages(request: LlmRequest) -> list[dict[str, str]]:
             )[:8_000]
         else:
             messages.append({"role": role, "content": text})
-    current = _redact_text(request.text)
+    current = redact_text(request.text, max_length=4_000).text
     if messages and messages[-1]["role"] == "user":
         messages[-1]["content"] = (
             messages[-1]["content"] + "\n" + current

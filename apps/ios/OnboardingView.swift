@@ -110,10 +110,9 @@ struct OnboardingView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .auraField()
+                .onChange(of: email) { appModel.clearOTPError() }
 
-            errorCard {
-                Task { await appModel.requestOTP(for: email) }
-            }
+            otpErrorCard(phase: .request)
 
             Button {
                 Task { await appModel.requestOTP(for: email) }
@@ -135,11 +134,16 @@ struct OnboardingView: View {
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
                 .auraField()
+                .onChange(of: appModel.otpCode) {
+                    let digits = appModel.otpCode.filter(\.isNumber)
+                    appModel.otpCode = String(digits.prefix(6))
+                    appModel.clearOTPError()
+                }
 
             if let message = appModel.deliveryMessage {
                 Text(message).font(.footnote).foregroundStyle(.secondary)
             }
-            errorCard { Task { await appModel.verifyOTP() } }
+            otpErrorCard(phase: .verification)
 
             Button {
                 Task { await appModel.verifyOTP() }
@@ -148,6 +152,14 @@ struct OnboardingView: View {
             }
             .buttonStyle(AuraPrimaryButtonStyle())
             .disabled(appModel.otpCode.count < 6 || appModel.isLoading)
+
+            if appModel.otpError?.kind != .tooManyAttempts {
+                Button("Enviar novo código") {
+                    Task { await appModel.requestOTP(for: appModel.email) }
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(appModel.isLoading)
+            }
 
             Button("Usar outro e-mail") {
                 appModel.restart()
@@ -202,19 +214,32 @@ struct OnboardingView: View {
                             }
                             .padding(16)
                             .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 14))
+                            .background(
+                                answers[question.id]?.id == option.id
+                                    ? AuraTheme.pink.opacity(0.06)
+                                    : Color.white,
+                                in: RoundedRectangle(cornerRadius: 14)
+                            )
                             .overlay {
                                 RoundedRectangle(cornerRadius: 14)
-                                    .stroke(answers[question.id]?.id == option.id ? AuraTheme.pink : AuraTheme.border, lineWidth: answers[question.id]?.id == option.id ? 2.5 : 1)
+                                    .inset(by: 1.5)
+                                    .strokeBorder(
+                                        answers[question.id]?.id == option.id ? AuraTheme.pink : AuraTheme.border,
+                                        lineWidth: answers[question.id]?.id == option.id ? 3 : 1
+                                    )
                             }
                         }
                         .buttonStyle(.plain)
+                        .padding(.horizontal, 1)
+                        .accessibilityAddTraits(answers[question.id]?.id == option.id ? .isSelected : [])
                     }
 
                     Text(question.context)
                         .font(.footnote.italic())
                         .foregroundStyle(AuraTheme.pink)
                 }
+                // Breathing room so the selected 3pt border is never shaved by the ScrollView clip edge.
+                .padding(.horizontal, 3)
             }
 
             errorCard { submitQuiz() }
@@ -243,6 +268,56 @@ struct OnboardingView: View {
 
     @ViewBuilder private func errorCard(retry: @escaping () -> Void) -> some View {
         if let message = appModel.errorMessage { ErrorCard(message: message, retry: retry) }
+    }
+
+    @ViewBuilder private func otpErrorCard(phase: OTPPhase) -> some View {
+        if let error = appModel.otpError {
+            VStack(alignment: .leading, spacing: 10) {
+                Label {
+                    Text(error.title)
+                } icon: {
+                    Image(systemName: error.systemImage)
+                        .foregroundStyle(error.kind == .connection ? Color.orange : AuraTheme.pink)
+                }
+                .font(.headline)
+                .foregroundStyle(AuraTheme.purple)
+                Text(error.message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let actionTitle = error.actionTitle {
+                    Button(actionTitle) {
+                        if phase == .request || error.kind == .expired || error.kind == .emailDelivery {
+                            let targetEmail = phase == .request ? email : appModel.email
+                            Task { await appModel.requestOTP(for: targetEmail) }
+                        } else {
+                            Task { await appModel.verifyOTP() }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                (error.kind == .connection ? Color.orange : AuraTheme.pink).opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 16)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke((error.kind == .connection ? Color.orange : AuraTheme.pink).opacity(0.35))
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(error.title). \(error.message)")
+        } else {
+            errorCard {
+                if phase == .request {
+                    Task { await appModel.requestOTP(for: email) }
+                } else {
+                    Task { await appModel.verifyOTP() }
+                }
+            }
+        }
     }
 
     private func fieldLabel(_ value: String) -> some View {

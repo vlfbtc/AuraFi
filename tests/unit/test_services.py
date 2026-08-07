@@ -39,6 +39,7 @@ from services.market_data import (
     DeFiLlamaAdapter,
     InMemoryCache,
     MarketDataError,
+    MarketDetailEnricher,
 )
 from services.notifications import (
     AlertDataSource,
@@ -285,6 +286,42 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
         self.assertTrue(stale.data_source.is_stale)
         self.assertIn("stale", (stale.data_source.freshness_note or "").lower())
 
+    def test_detalhe_reutiliza_cache_live_valido_sem_refetch_de_pools(self) -> None:
+        class Http:
+            calls = 0
+
+            def get(self, url: str, *, timeout_seconds: float):
+                self.calls += 1
+                return {
+                    "data": [{
+                        "pool": "pool-cache-detail",
+                        "project": "P",
+                        "poolMeta": "Pool",
+                        "symbol": "USDC",
+                        "chain": "Base",
+                        "apy": 5.0,
+                        "tvlUsd": 1000.0,
+                        "observed_at": NOW.isoformat(),
+                    }]
+                }
+
+        http = Http()
+        adapter = DeFiLlamaAdapter(
+            base_url="https://example.invalid",
+            endpoint="/pools",
+            http_client=http,
+            cache=InMemoryCache(),
+            clock=MutableClock(),
+        )
+
+        live = adapter.read(mode="live")
+        detail = adapter.read_for_detail(mode="live")
+
+        self.assertEqual(http.calls, 1)
+        self.assertEqual(live.items[0].opportunity_id, detail.items[0].opportunity_id)
+        self.assertEqual(detail.data_source.mode, "cache")
+        self.assertFalse(detail.data_source.is_stale)
+
     def test_market_data_rejeita_payload_sem_oportunidade(self) -> None:
         with self.assertRaises(MarketDataError):
             DeFiLlamaAdapter(fallback=lambda: {"data": []}).read(mode="fallback")
@@ -338,6 +375,144 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
         )
         self.assertEqual(adapter.read(mode="live").items[0].pool, "Syrup USDC")
 
+    def test_detalhe_enriquece_historico_7d_30d_e_ptax_sem_sintetizar(self) -> None:
+        class Http:
+            def get(self, url: str, *, timeout_seconds: float):
+                if "/chart/pool-1" in url:
+                    return {
+                        "data": [
+                            {
+                                "timestamp": "2026-07-03T12:00:00Z",
+                                "apy": 4.0,
+                                "tvlUsd": 900.0,
+                            },
+                            {
+                                "timestamp": "2026-07-26T12:00:00Z",
+                                "apy": 5.0,
+                                "tvlUsd": 1000.0,
+                            },
+                            {
+                                "timestamp": "2026-08-02T12:00:00Z",
+                                "apy": 7.0,
+                                "tvlUsd": 1100.0,
+                            },
+                        ]
+                    }
+                assert "CotacaoDolarPeriodo" in url
+                return {
+                    "value": [
+                        {
+                            "cotacaoCompra": 5.20,
+                            "cotacaoVenda": 5.22,
+                            "dataHoraCotacao": "2026-08-01 13:00:00.000",
+                            "tipoBoletim": "Fechamento",
+                        }
+                    ]
+                }
+
+        enricher = MarketDetailEnricher(
+            defillama_base_url="https://yields.llama.fi",
+            fx_base_url="https://olinda.bcb.gov.br/ptax",
+            http_client=Http(),
+            clock=MutableClock(),
+        )
+        detail = enricher.enrich(
+            opportunity_id="pool-1", tvl_usd=1000.0, mode="live"
+        )
+
+        history = detail["history"]
+        self.assertEqual(history["status"], "available")
+        self.assertEqual(history["windows"]["7d"]["apy"]["average"], 6.0)
+        self.assertEqual(history["windows"]["7d"]["apy"]["trend"], "up")
+        self.assertEqual(
+            history["windows"]["7d"]["tvl_usd"]["change_percent"], 10.0
+        )
+        self.assertEqual(history["windows"]["30d"]["point_count"], 3)
+        display = detail["currency_display"]
+        self.assertEqual(display["primary"], {"value": 5210.0, "currency": "BRL"})
+        self.assertEqual(display["secondary"], {"value": 1000.0, "currency": "USD"})
+        self.assertEqual(display["fx"]["rate"], 5.21)
+        self.assertEqual(display["fx"]["observed_at"], "2026-08-01T16:00:00Z")
+
+    def test_detalhe_fail_soft_usa_cache_identificado_e_depois_indisponivel(self) -> None:
+        class Http:
+            fail = False
+
+            def get(self, url: str, *, timeout_seconds: float):
+                if self.fail:
+                    raise OSError("offline")
+                if "/chart/" in url:
+                    return {
+                        "data": [{
+                            "timestamp": NOW.isoformat(),
+                            "apy": 5.0,
+                            "tvlUsd": 1000.0,
+                        }]
+                    }
+                return {
+                    "value": [{
+                        "cotacaoCompra": 5.0,
+                        "cotacaoVenda": 5.2,
+                        "dataHoraCotacao": "2026-08-02 09:00:00.000",
+                    }]
+                }
+
+        clock = MutableClock()
+        http = Http()
+        enricher = MarketDetailEnricher(
+            defillama_base_url="https://yields.llama.fi",
+            fx_base_url="https://olinda.bcb.gov.br/ptax",
+            http_client=http,
+            clock=clock,
+            history_ttl_seconds=300,
+            fx_ttl_seconds=300,
+        )
+        enricher.enrich(opportunity_id="p", tvl_usd=100, mode="live")
+        clock.value = NOW + timedelta(seconds=301)
+        http.fail = True
+        cached = enricher.enrich(opportunity_id="p", tvl_usd=100, mode="live")
+        self.assertEqual(cached["history"]["data_source"]["mode"], "cache")
+        self.assertTrue(cached["history"]["data_source"]["is_stale"])
+        self.assertEqual(cached["currency_display"]["fx"]["mode"], "cache")
+        self.assertTrue(cached["currency_display"]["fx"]["is_stale"])
+
+        empty = MarketDetailEnricher(
+            defillama_base_url="https://yields.llama.fi",
+            fx_base_url="https://olinda.bcb.gov.br/ptax",
+            http_client=http,
+            clock=clock,
+        ).enrich(opportunity_id="other", tvl_usd=100, mode="live")
+        self.assertEqual(empty["history"]["status"], "unavailable")
+        self.assertEqual(empty["currency_display"]["primary"]["currency"], "USD")
+        self.assertIsNone(empty["currency_display"]["secondary"])
+
+    def test_listagem_reutiliza_uma_unica_cotacao_ptax(self) -> None:
+        class Http:
+            calls = 0
+
+            def get(self, url: str, *, timeout_seconds: float):
+                self.calls += 1
+                return {
+                    "value": [{
+                        "cotacaoCompra": 5.0,
+                        "cotacaoVenda": 5.2,
+                        "dataHoraCotacao": "2026-08-02 09:00:00.000",
+                    }]
+                }
+
+        http = Http()
+        enricher = MarketDetailEnricher(
+            defillama_base_url=None,
+            fx_base_url="https://olinda.bcb.gov.br/ptax",
+            http_client=http,
+            clock=MutableClock(),
+        )
+        displays = enricher.currency_displays([100.0, 200.0, 300.0], mode="live")
+
+        self.assertEqual(http.calls, 1)
+        self.assertEqual([item["primary"]["value"] for item in displays], [510.0, 1020.0, 1530.0])
+        self.assertTrue(all(item["secondary"]["currency"] == "USD" for item in displays))
+
 
 class SimulationAndConversationTests(unittest.TestCase):
     def test_simulacao_gera_30_180_365_sem_execucao(self) -> None:
@@ -383,13 +558,94 @@ class SimulationAndConversationTests(unittest.TestCase):
         created = conversation.create_conversation(token, "simulated", consent, request_id="req-conv", correlation_id="cor-conv")
         response = conversation.send_message(token, created.conversation.conversation_id, MessageRequest("olá Aura", "simulated", consent), request_id="req-msg")
         assistant = response.assistant_message
-        self.assertEqual(assistant.payload["kind"], "faq")
+        self.assertEqual(assistant.payload["kind"], "educational_fallback")
         self.assertTrue(assistant.payload["fallback_used"])
         self.assertEqual(assistant.payload["llm"]["fallback"], "faq")
         self.assertFalse(assistant.payload["llm"]["llm_available"])
+        self.assertEqual(assistant.payload["llm"]["service_status"], "unavailable")
+        self.assertEqual(response.metadata["failure_code"], "LLM_UNAVAILABLE")
         self.assertIn("retorno", assistant.disclaimer.lower())
         self.assertEqual(assistant.request_id, "req-msg")
         self.assertEqual(assistant.correlation_id, created.conversation.correlation_id)
+
+    def test_explain_compare_e_cash_and_carry_degradam_sem_exigir_policy(self) -> None:
+        identity, token, consent = self._authenticated_conversation()
+        service = ConversationService(
+            identity=identity,
+            llm=UnavailableLlm(),
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("educational-fallback"),
+        )
+        created = service.create_conversation(token, "simulated", consent)
+
+        for prompt, expected in (
+            ("Explique o risco desta pool", "contrato inteligente"),
+            ("Compare as duas alternativas", "apy observado"),
+            ("Como funciona cash-and-carry?", "derivativos"),
+        ):
+            response = service.send_message(
+                token,
+                created.conversation.conversation_id,
+                MessageRequest(prompt, "simulated", consent),
+            )
+            payload = response.assistant_message.payload
+            self.assertEqual(payload["kind"], "educational_fallback")
+            self.assertIn(expected, payload["text"].casefold())
+            self.assertNotIn("política de elegibilidade", payload["text"].casefold())
+            self.assertEqual(payload["llm"]["service_status"], "unavailable")
+
+    def test_simulacao_sem_inputs_retorna_requisitos_sem_culpar_llm(self) -> None:
+        identity, token, consent = self._authenticated_conversation()
+        service = ConversationService(
+            identity=identity,
+            simulation=SimulationService(AssumptionFixtureFormula()),
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("simulation-input"),
+        )
+        created = service.create_conversation(token, "simulated", consent)
+        response = service.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest("Quero simular", "simulated", consent, action="simulate"),
+        )
+        payload = response.assistant_message.payload
+        self.assertEqual(payload["kind"], "simulation_input_required")
+        self.assertEqual(payload["llm"]["service_status"], "not_required")
+        self.assertEqual(payload["required_inputs"], ["opportunity_id", "amount", "asset", "horizons_days"])
+
+    def test_external_message_id_reenvia_par_existente_sem_duplicar(self) -> None:
+        class CountingProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, request):
+                self.calls += 1
+                return LlmResult("Resposta educativa.", mode="provider", provider="claude")
+
+        identity, token, consent = self._authenticated_conversation()
+        provider = CountingProvider()
+        service = ConversationService(
+            identity=identity,
+            llm=provider,
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("idempotent-message"),
+        )
+        created = service.create_conversation(token, "simulated", consent)
+        request = MessageRequest(
+            "Explique esta oportunidade",
+            "simulated",
+            consent,
+            external_message_id="ios-message-uuid-1",
+        )
+        first = service.send_message(token, created.conversation.conversation_id, request)
+        replay = service.send_message(token, created.conversation.conversation_id, request)
+        stored = service.get_conversation(token, created.conversation.conversation_id)
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(stored.conversation.messages), 2)
+        self.assertEqual(first.user_message.message_id, replay.user_message.message_id)
+        self.assertEqual(first.assistant_message.message_id, replay.assistant_message.message_id)
+        self.assertTrue(replay.metadata["idempotent_replay"])
 
     def test_provider_output_requesting_secrets_is_replaced_by_safe_faq(self) -> None:
         class UnsafeProvider:

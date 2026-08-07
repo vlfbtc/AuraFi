@@ -47,6 +47,8 @@ interface OpportunityDataSource {
   readOnly: true;
   isStale: boolean;
   freshnessNote?: string;
+  sourceLabel?: string;
+  statusLabel?: string;
 }
 
 interface SyntheticOpportunity {
@@ -56,8 +58,8 @@ interface SyntheticOpportunity {
   asset: string;
   blockchain: string;
   category: string;
-  apy: { value: number; observedAt: string };
-  tvl: { value: number; currency: string; observedAt: string };
+  apy: { value: number; observedAt: string; display?: string };
+  tvl: { value: number; currency: string; observedAt: string; display?: string; displayCompact?: string };
   liquidity: { level: 'low' | 'medium' | 'high' | 'unknown'; observedAt: string };
   risk: { level: RiskLevel; dimensions: readonly string[] };
   auditStatus: AuditStatus;
@@ -72,12 +74,17 @@ interface SimulationScenario {
   projectedYield: number;
   idleStablecoinValue: number;
   currency: string;
+  projectedValueDisplay?: string;
+  projectedYieldDisplay?: string;
+  projectedGainDisplay?: string;
+  idleStablecoinValueDisplay?: string;
 }
 
 interface SimulationResult {
   simulationId: string;
   opportunityId: string;
   amount: number;
+  amountDisplay?: string;
   asset: string;
   horizons: readonly SimulationHorizon[];
   scenarios: readonly SimulationScenario[];
@@ -259,8 +266,18 @@ function mapApiOpportunity(item: ApiOpportunity): SyntheticOpportunity {
     asset: item.asset,
     blockchain: item.blockchain,
     category: item.pool.toLowerCase().includes('supply') ? 'Lending' : 'Liquidity',
-    apy: { value: item.apy.value, observedAt: item.apy.observedAt },
-    tvl: { value: item.tvl.value, currency: item.tvl.currency, observedAt: item.tvl.observedAt },
+    apy: {
+      value: item.apy.value,
+      observedAt: item.apy.observedAt,
+      ...(item.apy.display ? { display: item.apy.display } : {}),
+    },
+    tvl: {
+      value: item.tvl.value,
+      currency: item.tvl.currency,
+      observedAt: item.tvl.observedAt,
+      ...(item.tvl.display ? { display: item.tvl.display } : {}),
+      ...(item.tvl.displayCompact ? { displayCompact: item.tvl.displayCompact } : {}),
+    },
     liquidity: { level: item.liquidity.level, observedAt: item.liquidity.observedAt },
     risk: { level: item.risk.level, dimensions: item.risk.dimensions },
     auditStatus: item.auditStatus ?? 'unknown',
@@ -273,6 +290,8 @@ function mapApiOpportunity(item: ApiOpportunity): SyntheticOpportunity {
       readOnly: true,
       isStale: item.dataSource.isStale,
       ...(item.dataSource.freshnessNote ? { freshnessNote: item.dataSource.freshnessNote } : {}),
+      ...(item.dataSource.sourceLabel ? { sourceLabel: item.dataSource.sourceLabel } : {}),
+      ...(item.dataSource.statusLabel ? { statusLabel: item.dataSource.statusLabel } : {}),
     },
     disclaimer: item.disclaimer,
   };
@@ -745,6 +764,7 @@ export default function App() {
         simulationId: data.simulationId,
         opportunityId: data.opportunityId,
         amount: data.input.amount,
+        ...(data.input.amountDisplay ? { amountDisplay: data.input.amountDisplay } : {}),
         asset: data.input.asset,
         horizons: data.input.horizonsDays,
         scenarios: data.scenarios.map((scenario) => ({
@@ -753,6 +773,10 @@ export default function App() {
           projectedYield: scenario.projectedYield,
           idleStablecoinValue: scenario.idleStablecoinValue ?? data.input.amount,
           currency: scenario.currency,
+          ...(scenario.projectedValueDisplay ? { projectedValueDisplay: scenario.projectedValueDisplay } : {}),
+          ...(scenario.projectedYieldDisplay ? { projectedYieldDisplay: scenario.projectedYieldDisplay } : {}),
+          ...(scenario.projectedGainDisplay ? { projectedGainDisplay: scenario.projectedGainDisplay } : {}),
+          ...(scenario.idleStablecoinValueDisplay ? { idleStablecoinValueDisplay: scenario.idleStablecoinValueDisplay } : {}),
         })),
         assumptions: data.assumptions,
         formulaVersion: data.assumptions[0] ? 'api-assumption-v1' : SIMULATION_FORMULA_VERSION,
@@ -1313,15 +1337,15 @@ export default function App() {
                     <button className={`favorite-button${isFavorite ? ' is-favorite' : ''}`} type="button" aria-label={isFavorite ? `Remover ${opportunity.protocol} dos favoritos` : `Favoritar ${opportunity.protocol}`} aria-pressed={isFavorite} onClick={() => toggleFavorite(opportunity.opportunityId)}>{isFavorite ? '★' : '☆'}</button>
                   </div>
                   <div className="opportunity-metrics">
-                    <div><span>APY observado</span><strong>{formatPercent(opportunity.apy.value)}</strong></div>
-                    <div><span>TVL observado</span><strong>{opportunity.tvl.currency} {opportunity.tvl.value.toLocaleString('pt-BR')}</strong></div>
+                    <div><span>APY observado</span><strong>{opportunity.apy.display ?? formatPercent(opportunity.apy.value)}</strong></div>
+                    <div><span>TVL observado</span><strong>{opportunity.tvl.displayCompact ?? `${opportunity.tvl.currency} ${opportunity.tvl.value.toLocaleString('pt-BR')}`}</strong></div>
                     <div><span>Risco informado</span><strong>{riskLabel(opportunity.risk.level)}</strong></div>
                   </div>
                   <div className={`card-source-row source-${opportunity.dataSource.mode}`}>
-                    <span><i aria-hidden="true" /> {dataModeLabel(opportunity.dataSource.mode)} · DeFiLlama · informativo</span>
+                    <span><i aria-hidden="true" /> {opportunity.dataSource.statusLabel ?? dataModeLabel(opportunity.dataSource.mode)} · {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · informativo</span>
                     <span>{opportunity.dataSource.isStale ? 'Pode estar desatualizado' : 'Atualizado nesta leitura'}</span>
                   </div>
-                  <div className="opportunity-card-meta"><span>Fonte: DeFiLlama · {dataModeLabel(opportunity.dataSource.mode).toLowerCase()}</span><span>Observado: {formatDateTime(opportunity.dataSource.observedAt)} · {opportunity.dataSource.isStale ? 'atualização pendente' : 'leitura atual'}</span></div>
+                  <div className="opportunity-card-meta"><span>Fonte: {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · {(opportunity.dataSource.statusLabel ?? dataModeLabel(opportunity.dataSource.mode)).toLowerCase()}</span><span>Observado: {formatDateTime(opportunity.dataSource.observedAt)} · {opportunity.dataSource.isStale ? 'atualização pendente' : 'leitura atual'}</span></div>
                   <div className="opportunity-card-footer"><span className="stale-label">{opportunity.dataSource.isStale ? '⚠ Pode estar desatualizada' : '✓ Leitura atual'}</span><span className="data-state-note">Fonte observada · sem movimentação de recursos</span><button className="text-button" type="button" onClick={() => openOpportunity(opportunity.opportunityId)}>Abrir detalhe <span aria-hidden="true">→</span></button></div>
                 </article>
               );
@@ -1395,15 +1419,15 @@ export default function App() {
 
         {simulationState === 'ready' && simulationResult ? (
           <section className="simulation-results" aria-labelledby="simulation-results-title">
-            <div className="section-heading-row"><div><p className="eyebrow">Comparação educativa</p><h2 id="simulation-results-title">Cenários para {formatAssetAmount(simulationResult.amount)} {simulationResult.asset}</h2></div><span className="list-count">{simulationResult.scenarios.length} cenários</span></div>
+            <div className="section-heading-row"><div><p className="eyebrow">Comparação educativa</p><h2 id="simulation-results-title">Cenários para {simulationResult.amountDisplay ?? `${formatAssetAmount(simulationResult.amount)} ${simulationResult.asset}`}</h2></div><span className="list-count">{simulationResult.scenarios.length} cenários</span></div>
             <div className="scenario-grid">
               {simulationResult.scenarios.map((scenario) => {
                 const comparison = scenario.projectedValue - scenario.idleStablecoinValue;
                 return (
                   <article className="scenario-card" key={scenario.horizonDays}>
                     <span className="scenario-horizon">{scenario.horizonDays} dias</span>
-                    <strong>{formatAssetAmount(scenario.projectedValue)} {scenario.currency}</strong>
-                    <dl><div><dt>Projeção do cenário</dt><dd>{formatPercent(scenario.projectedYield)}</dd></div><div><dt>Stablecoin parada</dt><dd>{formatAssetAmount(scenario.idleStablecoinValue)} {scenario.currency}</dd></div><div><dt>Diferença educativa</dt><dd>{comparison >= 0 ? '+' : ''}{formatAssetAmount(comparison)} {scenario.currency}</dd></div></dl>
+                    <strong>{scenario.projectedValueDisplay ?? `${formatAssetAmount(scenario.projectedValue)} ${scenario.currency}`}</strong>
+                    <dl><div><dt>Projeção do cenário</dt><dd>{scenario.projectedYieldDisplay ?? formatPercent(scenario.projectedYield)}</dd></div><div><dt>Stablecoin parada</dt><dd>{scenario.idleStablecoinValueDisplay ?? `${formatAssetAmount(scenario.idleStablecoinValue)} ${scenario.currency}`}</dd></div><div><dt>Diferença educativa</dt><dd>{scenario.projectedGainDisplay ? `${comparison >= 0 ? '+' : ''}${scenario.projectedGainDisplay}` : `${comparison >= 0 ? '+' : ''}${formatAssetAmount(comparison)} ${scenario.currency}`}</dd></div></dl>
                   </article>
                 );
               })}

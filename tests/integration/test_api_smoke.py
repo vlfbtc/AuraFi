@@ -221,6 +221,7 @@ class ApiSmokeTests(unittest.TestCase):
         status, opportunities = self.request("GET", "/v1/opportunities", token=token)
         self.assertEqual(status, 200)
         opportunity = opportunities["items"][0]
+        self.assertIn("currency_display", opportunity)
 
         status, detail = self.request(
             "GET",
@@ -232,6 +233,12 @@ class ApiSmokeTests(unittest.TestCase):
             detail["opportunity"]["opportunity_id"],
             opportunity["opportunity_id"],
         )
+        self.assertEqual(detail["opportunity"]["history"]["status"], "unavailable")
+        self.assertEqual(
+            detail["opportunity"]["currency_display"]["primary"]["currency"],
+            "USD",
+        )
+        self.assertIsNone(detail["opportunity"]["currency_display"]["secondary"])
 
         status, simulation = self.request(
             "POST",
@@ -749,6 +756,51 @@ class ApiSmokeTests(unittest.TestCase):
         self.assertTrue(source["is_stale"])
         self.assertNotEqual(source["mode"], "live")
         self.assertIn("fallback", source["freshness_note"].lower())
+
+
+class ApiHandlerEnrichmentTests(unittest.TestCase):
+    """Cobre o contrato de detalhe sem depender de bind de socket no CI."""
+
+    def test_opportunity_detail_inclui_enriquecimento_fail_soft(self) -> None:
+        app = create_app()
+        requested = app.handle(
+            Request(
+                method="POST",
+                target="/v1/auth/otp/request",
+                headers={},
+                body={"email": "maria@example.com", "channel": "web_widget"},
+            )
+        )
+        challenge_id = requested.payload["challenge_id"]
+        otp = app.otp_sink.code_for(challenge_id)
+        authenticated = app.handle(
+            Request(
+                method="POST",
+                target="/v1/auth/otp/verify",
+                headers={},
+                body={"challenge_id": challenge_id, "otp": otp},
+            )
+        )
+        headers = {
+            "Authorization": f"Bearer {authenticated.payload['session']['access_token']}"
+        }
+        opportunities = app.handle(
+            Request(method="GET", target="/v1/opportunities", headers=headers)
+        )
+        opportunity_id = opportunities.payload["items"][0]["opportunity_id"]
+        detail = app.handle(
+            Request(
+                method="GET",
+                target=f"/v1/opportunities/{opportunity_id}",
+                headers=headers,
+            )
+        )
+
+        self.assertEqual(detail.status, 200)
+        self.assertEqual(detail.payload["opportunity"]["history"]["status"], "unavailable")
+        display = detail.payload["opportunity"]["currency_display"]
+        self.assertEqual(display["primary"]["currency"], "USD")
+        self.assertIsNone(display["secondary"])
 
 
 if __name__ == "__main__":

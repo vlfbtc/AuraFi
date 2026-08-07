@@ -79,6 +79,10 @@ struct APIDataSource: Codable, Equatable {
     let readOnly: Bool
     let isStale: Bool
     let freshnessNote: String?
+    /// Rótulos prontos para exibição fornecidos pelo BFF, já higienizados de
+    /// sentinelas internas. O cliente prefere estes ao invés de formatar/filtrar.
+    let serverSourceLabel: String?
+    let serverStatusLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case source
@@ -89,13 +93,31 @@ struct APIDataSource: Codable, Equatable {
         case readOnly = "read_only"
         case isStale = "is_stale"
         case freshnessNote = "freshness_note"
+        case serverSourceLabel = "source_label"
+        case serverStatusLabel = "status_label"
     }
 
     var sourceLabel: String {
-        source.caseInsensitiveCompare("defillama") == .orderedSame ? "DeFiLlama" : source
+        usefulSourceLabel ?? "Indisponível"
+    }
+
+    /// O BFF entrega `source_label` já limpo; só há fallback local para caches
+    /// antigos anteriores a esse contrato.
+    var usefulSourceLabel: String? {
+        if let label = serverSourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !label.isEmpty {
+            return label
+        }
+        let normalized = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return normalized.caseInsensitiveCompare("defillama") == .orderedSame ? "DeFiLlama" : normalized
     }
 
     var statusLabel: String {
+        if let label = serverStatusLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !label.isEmpty {
+            return label
+        }
         if isStale { return "Atualização pendente" }
         switch mode {
         case "live": return "Dados atualizados"
@@ -105,9 +127,16 @@ struct APIDataSource: Codable, Equatable {
     }
 
     var statusDescription: String {
-        if let freshnessNote, !freshnessNote.isEmpty { return freshnessNote }
+        if let usefulFreshnessNote { return usefulFreshnessNote }
         if isStale { return "Confira o momento da observação antes de tomar qualquer decisão." }
         return "Leitura de mercado com origem e momento informados."
+    }
+
+    var usefulFreshnessNote: String? {
+        guard let note = freshnessNote?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !note.isEmpty
+        else { return nil }
+        return note
     }
 }
 
@@ -260,22 +289,53 @@ struct APIMarketValue: Codable {
     let unit: String?
     let currency: String?
     let observedAt: String
+    /// Strings prontas para exibição fornecidas pelo BFF (o cliente não formata).
+    let display: String?
+    let displayCompact: String?
 
     enum CodingKeys: String, CodingKey {
         case value
         case unit
         case currency
         case observedAt = "observed_at"
+        case display
+        case displayCompact = "display_compact"
+    }
+
+    init(
+        value: Double,
+        unit: String?,
+        currency: String?,
+        observedAt: String,
+        display: String? = nil,
+        displayCompact: String? = nil
+    ) {
+        self.value = value
+        self.unit = unit
+        self.currency = currency
+        self.observedAt = observedAt
+        self.display = display
+        self.displayCompact = displayCompact
     }
 }
 
 struct APILiquidity: Codable {
     let level: String
     let observedAt: String
+    let value: Double?
+    let currency: String?
 
     enum CodingKeys: String, CodingKey {
         case level
         case observedAt = "observed_at"
+        case value, currency
+    }
+
+    init(level: String, observedAt: String, value: Double? = nil, currency: String? = nil) {
+        self.level = level
+        self.observedAt = observedAt
+        self.value = value
+        self.currency = currency
     }
 }
 
@@ -283,6 +343,135 @@ struct APIRisk: Codable {
     let score: Double?
     let level: String
     let dimensions: [String]
+}
+
+struct OpportunityHistoryPoint: Codable, Identifiable {
+    let observedAt: String
+    let apyPercent: Double?
+    let tvlUSD: Double?
+
+    var id: String { observedAt }
+
+    enum CodingKeys: String, CodingKey {
+        case observedAt = "observed_at"
+        case apyPercent = "apy_percent"
+        case tvlUSD = "tvl_usd"
+    }
+}
+
+struct OpportunityAPYWindow: Codable {
+    let average: Double?
+    let minimum: Double?
+    let maximum: Double?
+    let first: Double?
+    let latest: Double?
+    let changePercentagePoints: Double?
+    let trend: String?
+
+    enum CodingKeys: String, CodingKey {
+        case average, minimum, maximum, first, latest, trend
+        case changePercentagePoints = "change_percentage_points"
+    }
+}
+
+struct OpportunityTVLWindow: Codable {
+    let first: Double?
+    let latest: Double?
+    let change: Double?
+    let changePercent: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case first, latest, change
+        case changePercent = "change_percent"
+    }
+}
+
+struct OpportunityHistoryWindow: Codable {
+    let windowDays: Int
+    let pointCount: Int
+    let observedFrom: String
+    let observedTo: String
+    let apy: OpportunityAPYWindow?
+    let tvlUSD: OpportunityTVLWindow?
+
+    enum CodingKeys: String, CodingKey {
+        case windowDays = "window_days"
+        case pointCount = "point_count"
+        case observedFrom = "observed_from"
+        case observedTo = "observed_to"
+        case apy
+        case tvlUSD = "tvl_usd"
+    }
+}
+
+struct OpportunityHistorySource: Codable {
+    let source: String?
+    let dataset: String?
+    let mode: String?
+    let observedAt: String?
+    let retrievedAt: String?
+    let isStale: Bool?
+    let freshnessNote: String?
+    let serverSourceLabel: String?
+
+    enum CodingKeys: String, CodingKey {
+        case source, dataset, mode
+        case observedAt = "observed_at"
+        case retrievedAt = "retrieved_at"
+        case isStale = "is_stale"
+        case freshnessNote = "freshness_note"
+        case serverSourceLabel = "source_label"
+    }
+}
+
+struct OpportunityHistory: Codable {
+    let status: String
+    let points: [OpportunityHistoryPoint]
+    let windows: [String: OpportunityHistoryWindow]
+    let dataSource: OpportunityHistorySource
+
+    enum CodingKeys: String, CodingKey {
+        case status, points, windows
+        case dataSource = "data_source"
+    }
+}
+
+struct CurrencyAmount: Codable {
+    let value: Double
+    let currency: String
+    let display: String?
+    let displayCompact: String?
+
+    enum CodingKeys: String, CodingKey {
+        case value
+        case currency
+        case display
+        case displayCompact = "display_compact"
+    }
+}
+
+struct CurrencyFX: Codable {
+    let status: String
+    let source: String
+    let rate: Double?
+    let observedAt: String?
+    let retrievedAt: String?
+    let isStale: Bool?
+    let freshnessNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, source, rate
+        case observedAt = "observed_at"
+        case retrievedAt = "retrieved_at"
+        case isStale = "is_stale"
+        case freshnessNote = "freshness_note"
+    }
+}
+
+struct OpportunityCurrencyDisplay: Codable {
+    let primary: CurrencyAmount
+    let secondary: CurrencyAmount?
+    let fx: CurrencyFX
 }
 
 struct Opportunity: Identifiable, Codable {
@@ -298,6 +487,8 @@ struct Opportunity: Identifiable, Codable {
     let risk: APIRisk
     let dataSource: APIDataSource
     let disclaimer: String
+    let history: OpportunityHistory?
+    let currencyDisplay: OpportunityCurrencyDisplay?
 
     var id: String { opportunityId }
 
@@ -314,6 +505,40 @@ struct Opportunity: Identifiable, Codable {
         case risk
         case dataSource = "data_source"
         case disclaimer
+        case history
+        case currencyDisplay = "currency_display"
+    }
+
+    init(
+        opportunityId: String,
+        protocolName: String,
+        pool: String,
+        asset: String,
+        blockchain: String,
+        apy: APIMarketValue,
+        tvl: APIMarketValue,
+        liquidity: APILiquidity,
+        auditStatus: String?,
+        risk: APIRisk,
+        dataSource: APIDataSource,
+        disclaimer: String,
+        history: OpportunityHistory? = nil,
+        currencyDisplay: OpportunityCurrencyDisplay? = nil
+    ) {
+        self.opportunityId = opportunityId
+        self.protocolName = protocolName
+        self.pool = pool
+        self.asset = asset
+        self.blockchain = blockchain
+        self.apy = apy
+        self.tvl = tvl
+        self.liquidity = liquidity
+        self.auditStatus = auditStatus
+        self.risk = risk
+        self.dataSource = dataSource
+        self.disclaimer = disclaimer
+        self.history = history
+        self.currencyDisplay = currencyDisplay
     }
 
     var riskLabel: String {
@@ -326,18 +551,49 @@ struct Opportunity: Identifiable, Codable {
     }
 
     var apyLabel: String {
-        String(format: "%.2f%% a.a.", apy.value)
+        apy.display ?? String(format: "%.2f%% a.a.", apy.value)
     }
 
     var tvlLabel: String {
-        let currency = tvl.currency ?? "USD"
-        return String(format: "%@ %.0f", currency == "USD" ? "US$" : currency, tvl.value)
+        tvl.display ?? tvl.primaryMoneyLabel
+    }
+
+    var secondaryTVLLabel: String? {
+        nil
+    }
+}
+
+extension APIMarketValue {
+    var primaryMoneyLabel: String {
+        let code = normalizedCurrency ?? "USD"
+        return value.formattedCurrency(code)
+    }
+
+    private var normalizedCurrency: String? {
+        let normalized = currency?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
+
+}
+
+private extension Double {
+    func formattedCurrency(_ code: String) -> String {
+        formatted(
+            .currency(code: code)
+                .locale(Locale(identifier: "pt_BR"))
+                .precision(.fractionLength(0...2))
+        )
     }
 }
 
 struct OpportunityListResponse: Decodable {
     let items: [Opportunity]
     let pagination: Pagination
+    let meta: APIMeta?
+}
+
+struct OpportunityResponse: Decodable {
+    let opportunity: Opportunity
     let meta: APIMeta?
 }
 
@@ -377,6 +633,14 @@ struct SimulationScenario: Decodable, Identifiable {
     let projectedYield: Double
     let idleStablecoinValue: Double?
     let currency: String
+    /// Ganho em montante (projected_value − principal), derivado pelo BFF.
+    let projectedGain: Double?
+    /// Strings prontas para exibição fornecidas pelo BFF. `projectedYield` é
+    /// percentual acumulado; o "+" dos cards usa `projectedGain` (montante).
+    let projectedValueDisplay: String?
+    let projectedYieldDisplay: String?
+    let projectedGainDisplay: String?
+    let idleStablecoinValueDisplay: String?
 
     var id: Int { horizonDays }
 
@@ -386,6 +650,11 @@ struct SimulationScenario: Decodable, Identifiable {
         case projectedYield = "projected_yield"
         case idleStablecoinValue = "idle_stablecoin_value"
         case currency
+        case projectedGain = "projected_gain"
+        case projectedValueDisplay = "projected_value_display"
+        case projectedYieldDisplay = "projected_yield_display"
+        case projectedGainDisplay = "projected_gain_display"
+        case idleStablecoinValueDisplay = "idle_stablecoin_value_display"
     }
 }
 
@@ -421,6 +690,7 @@ struct SimulationInputResponse: Decodable {
     let asset: String
     let horizonsDays: [Int]
     let compareIdleStablecoin: Bool?
+    let amountDisplay: String?
 
     enum CodingKeys: String, CodingKey {
         case opportunityId = "opportunity_id"
@@ -428,10 +698,11 @@ struct SimulationInputResponse: Decodable {
         case asset
         case horizonsDays = "horizons_days"
         case compareIdleStablecoin = "compare_idle_stablecoin"
+        case amountDisplay = "amount_display"
     }
 }
 
-struct ConversationConsent: Codable {
+struct ConversationConsent: Codable, Equatable {
     let purpose: String
     let status: String
     let policyVersion: String
@@ -462,6 +733,7 @@ struct ConversationMessage: Identifiable, Decodable {
     let messageType: String
     let occurredAt: String
     let payload: ConversationPayload
+    let channel: ConversationChannel?
 
     var id: String { messageId }
     var isFromUser: Bool { messageType == "user_message" }
@@ -470,7 +742,22 @@ struct ConversationMessage: Identifiable, Decodable {
         case messageId = "message_id"
         case messageType = "message_type"
         case occurredAt = "occurred_at"
-        case payload
+        case payload, channel
+    }
+}
+
+struct ConversationChannel: Decodable {
+    let externalMessageId: String?
+    enum CodingKeys: String, CodingKey { case externalMessageId = "external_message_id" }
+}
+
+struct ConversationLLMStatus: Decodable {
+    let serviceStatus: String?
+    let failureCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case serviceStatus = "service_status"
+        case failureCode = "failure_code"
     }
 }
 
@@ -478,11 +765,13 @@ struct ConversationPayload: Decodable {
     let text: String?
     let fallbackUsed: Bool?
     let escalationFlag: Bool?
+    let llm: ConversationLLMStatus?
 
     enum CodingKeys: String, CodingKey {
         case text
         case fallbackUsed = "fallback_used"
         case escalationFlag = "escalation_flag"
+        case llm
     }
 }
 
@@ -598,6 +887,15 @@ struct AuraFiAPIClient {
         )
     }
 
+    func getOpportunity(sessionToken: String, opportunityId: String) async throws -> OpportunityResponse {
+        try await send(
+            method: "GET",
+            path: "/v1/opportunities/\(opportunityId)",
+            body: Optional<EmptyBody>.none,
+            token: sessionToken
+        )
+    }
+
     /// GET /v1/opportunities using the app session token.
     func listOpportunities(
         sessionToken: String,
@@ -704,19 +1002,41 @@ struct AuraFiAPIClient {
         sessionToken: String,
         conversationId: String,
         text: String,
-        consent: ConversationConsent
+        consent: ConversationConsent,
+        externalMessageId: String
     ) async throws -> ConversationMessageResponse {
         struct Body: Encodable {
             let text: String
             let channel: String
             let consent: ConversationConsent
+            let externalMessageId: String
+
+            enum CodingKeys: String, CodingKey {
+                case text, channel, consent
+                case externalMessageId = "external_message_id"
+            }
         }
         return try await send(
             method: "POST",
             path: "/v1/conversations/\(conversationId)/messages",
-            body: Body(text: text, channel: channel, consent: consent),
+            body: Body(
+                text: text,
+                channel: channel,
+                consent: consent,
+                externalMessageId: externalMessageId
+            ),
             token: sessionToken
         )
+    }
+
+    func getConversation(sessionToken: String, conversationId: String) async throws -> ConversationRecord {
+        let response: ConversationResponse = try await send(
+            method: "GET",
+            path: "/v1/conversations/\(conversationId)",
+            body: Optional<EmptyBody>.none,
+            token: sessionToken
+        )
+        return response.conversation
     }
 
     private func makeURL(path: String) throws -> URL {
