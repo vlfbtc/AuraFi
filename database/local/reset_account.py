@@ -17,6 +17,15 @@ import sqlite3
 import sys
 
 
+_APPEND_ONLY_DELETE_TRIGGER = (
+    "CREATE TRIGGER IF NOT EXISTS risk_profiles_append_only_delete\n"
+    "BEFORE DELETE ON risk_profiles\n"
+    "BEGIN\n"
+    "    SELECT RAISE(ABORT, 'risk profiles are append-only');\n"
+    "END"
+)
+
+
 def _delete(cursor: sqlite3.Cursor, account_id: str, email: str, dry_run: bool) -> dict[str, int]:
     steps: list[tuple[str, str, tuple]] = [
         ("messages", "DELETE FROM messages WHERE account_id = ?", (account_id,)),
@@ -44,12 +53,18 @@ def _delete(cursor: sqlite3.Cursor, account_id: str, email: str, dry_run: bool) 
         ("accounts", "DELETE FROM accounts WHERE account_id = ?", (account_id,)),
     ]
     counts: dict[str, int] = {}
-    for label, statement, params in steps:
-        if dry_run:
-            count_sql = statement.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
-            counts[label] = int(cursor.execute(count_sql, params).fetchone()[0])
-        else:
-            counts[label] = cursor.execute(statement, params).rowcount
+    if not dry_run:
+        cursor.execute("DROP TRIGGER IF EXISTS risk_profiles_append_only_delete")
+    try:
+        for label, statement, params in steps:
+            if dry_run:
+                count_sql = statement.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
+                counts[label] = int(cursor.execute(count_sql, params).fetchone()[0])
+            else:
+                counts[label] = cursor.execute(statement, params).rowcount
+    finally:
+        if not dry_run:
+            cursor.execute(_APPEND_ONLY_DELETE_TRIGGER)
     return counts
 
 
