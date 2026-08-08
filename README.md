@@ -1,6 +1,6 @@
 # AuraFi — Clareza para Investir
 
-AuraFi é uma plataforma de apoio à decisão para pessoas que desejam entender oportunidades de stablecoins em DeFi. O produto explica dados de mercado, considera um perfil de risco declarado e oferece simulações educativas. Não há custódia, conexão de wallet, assinatura ou execução de transações.
+AuraFi é uma plataforma de apoio à decisão para pessoas que desejam entender oportunidades de stablecoins em DeFi. O produto explica dados de mercado observados, considera um perfil de risco declarado e oferece simulações educativas. No centro está a Aura, uma assistente conversacional que responde em português apoiada nos dados de mercado atuais e no perfil do usuário. Não há custódia, conexão de wallet, assinatura ou execução de transações.
 
 Consulte [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) para a matriz
 atualizada do que está entregue, das dependências externas e das decisões de
@@ -10,7 +10,8 @@ produto ainda necessárias.
 
 - `apps/web-widget`: Web Widget atual, Vite + React + TypeScript.
 - `apps/ios`: aplicativo nativo SwiftUI para iOS 17 ou superior.
-- `services/api`: API atual, autenticação interna por OTP, perfil, oportunidades e simulações.
+- `services/api`: API HTTP (biblioteca padrão do Python) que orquestra os serviços de domínio.
+- `services/*`: identidade e OTP, mercado (DeFiLlama), conversa da Aura (Claude), recomendação, simulação e alertas.
 - `database`: persistência local SQLite e artefatos do DW.
 - `analytics`: validação da camada analítica.
 - `contracts`: contratos HTTP/OpenAPI e envelopes de mensagem.
@@ -115,6 +116,9 @@ Para desenvolvimento exclusivamente local, altere `AURAFI_API_BASE_URL` nas
 Build Settings para `http://127.0.0.1:8000`; HTTP continua aceito apenas para
 `localhost` e `127.0.0.1` em Debug.
 
+O aplicativo oferece bloqueio opcional por Face ID ou Touch ID, com o código do
+aparelho como alternativa, ativável em Ajustes.
+
 Para percorrer localmente a jornada de OTP no Simulator, use Python 3.11+ e
 inicie a API com um código fixo exclusivo de desenvolvimento:
 
@@ -206,9 +210,9 @@ Terminal para atualizar o `PATH`. No segundo terminal não é necessário ativar
 ## Validação
 
 ```bash
-python -m unittest discover -s tests -t . -p "test*.py"
-python -m compileall -q services database analytics
-python analytics/validate_pipeline.py
+python3 -m unittest discover -s tests -t . -p "test*.py"
+python3 -m compileall -q services database analytics
+python3 analytics/validate_pipeline.py
 ```
 
-No Windows, use `py -3` no lugar de `python` se necessário.
+Use Python 3.11 ou superior. No Windows, use `python` ou `py -3` no lugar de `python3`.

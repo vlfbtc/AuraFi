@@ -252,11 +252,11 @@ final class AuraFiTests: XCTestCase {
         XCTAssertEqual(scenario.projectedValueDisplay, "500,9 STETH")
     }
 
-    func testOptimisticChatMessageStartsSendingWithStableLocalIdentifier() {
+    func testOptimisticChatMessageStartsAsSentWithStableLocalIdentifier() {
         let message = ChatDisplayMessage(optimisticText: "Compare os riscos")
 
         XCTAssertTrue(message.isFromUser)
-        XCTAssertEqual(message.deliveryState, .sending)
+        XCTAssertEqual(message.deliveryState, .sent)
         XCTAssertNil(message.serverMessageId)
         XCTAssertFalse(message.id.isEmpty)
     }

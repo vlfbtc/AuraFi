@@ -23,8 +23,7 @@ enum AppFlow {
 enum MainTab: Hashable {
     case dashboard
     case aura
-    case simulation
-    case protocols
+    case explore
     case history
 }
 
@@ -147,6 +146,7 @@ enum MarketRefreshFeedback: Equatable {
 enum ChatDeliveryState: String, Codable, Equatable {
     case sending
     case sent
+    case delivered
     case failed
     case received
 }
@@ -165,7 +165,7 @@ struct ChatDisplayMessage: Identifiable, Codable, Equatable {
         text = serverMessage.payload.text ?? ""
         isFromUser = serverMessage.isFromUser
         isFallback = serverMessage.payload.fallbackUsed == true
-        deliveryState = serverMessage.isFromUser ? .sent : .received
+        deliveryState = serverMessage.isFromUser ? .delivered : .received
     }
 
     init(optimisticText: String) {
@@ -174,7 +174,7 @@ struct ChatDisplayMessage: Identifiable, Codable, Equatable {
         text = optimisticText
         isFromUser = true
         isFallback = false
-        deliveryState = .sending
+        deliveryState = .sent
     }
 
     init(pendingId: String, text: String) {
@@ -566,8 +566,7 @@ final class AppModel: ObservableObject {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty, normalized.count <= 4000,
               conversationConsent != nil,
-              !isSendingMessage,
-              !conversationMessages.contains(where: { $0.deliveryState == .sending })
+              !isSendingMessage
         else { return }
 
         let optimistic = ChatDisplayMessage(optimisticText: normalized)
@@ -580,10 +579,9 @@ final class AppModel: ObservableObject {
         guard !isSendingMessage,
               let index = conversationMessages.firstIndex(where: { $0.id == id }),
               conversationMessages[index].isFromUser,
-              conversationMessages[index].deliveryState == .failed,
-              !conversationMessages.contains(where: { $0.deliveryState == .sending })
+              conversationMessages[index].deliveryState == .failed
         else { return }
-        conversationMessages[index].deliveryState = .sending
+        conversationMessages[index].deliveryState = .sent
         await deliverMessage(id: id)
     }
 
@@ -613,7 +611,7 @@ final class AppModel: ObservableObject {
             )
             if let sentIndex = conversationMessages.firstIndex(where: { $0.id == id }) {
                 conversationMessages[sentIndex].serverMessageId = response.userMessage.messageId
-                conversationMessages[sentIndex].deliveryState = .sent
+                conversationMessages[sentIndex].deliveryState = .delivered
             }
             if !conversationMessages.contains(where: { $0.serverMessageId == response.assistantMessage.messageId }) {
                 conversationMessages.append(ChatDisplayMessage(serverMessage: response.assistantMessage))

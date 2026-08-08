@@ -1101,6 +1101,35 @@ class ConversationService:
                 ),
             )
 
+    def _recommendation_pivot(self, profile_missing: bool, opportunities: Sequence[Any]) -> str:
+        from services.market_data.presentation import format_percent
+
+        options: list[str] = []
+        for opp in tuple(opportunities or ())[:3]:
+            attrs = getattr(opp, "attributes", None)
+            attrs = attrs if isinstance(attrs, Mapping) else {}
+            head = " · ".join(
+                part for part in (str(attrs.get("protocol", "")).strip(), str(attrs.get("asset", "")).strip()) if part
+            )
+            apy = attrs.get("apy")
+            if head and isinstance(apy, Mapping) and isinstance(apy.get("value"), (int, float)):
+                head += f" ({format_percent(float(apy['value']))})"
+            if head:
+                options.append(head)
+        listing = f" Agora observo, por exemplo: {'; '.join(options)}." if options else ""
+
+        if profile_missing:
+            return (
+                "Para eu apoiar melhor a sua decisão, conclua o questionário de perfil de risco na aba Início. "
+                "Enquanto isso, já posso explicar os riscos das oportunidades atuais, comparar as opções e simular "
+                "cenários educativos." + listing
+            )
+        return (
+            "Eu apoio a sua decisão, mas não escolho uma alocação no seu lugar. O que posso fazer agora: explicar os "
+            "riscos de cada oportunidade, comparar as opções observadas e simular cenários educativos." + listing
+            + " Quer que eu compare as opções ou explique os riscos?"
+        )
+
     def _answer_recommendation(
         self,
         resolved: ResolvedIdentity,
@@ -1128,18 +1157,14 @@ class ConversationService:
             "recommendation": _recommendation_to_dict(recommendation),
         }
         if profile is None or not profile.is_declared or policy is None:
-            reason = (
-                "Para sugerir uma oportunidade, declare um perfil de risco e aguarde uma política de elegibilidade válida."
-                if profile is None or not profile.is_declared
-                else "A recomendação está pendente porque a política de elegibilidade não está válida."
-            )
+            profile_missing = profile is None or not profile.is_declared
             return _AssistantResult(
-                text=_sanitize(reason),
+                text=_sanitize(self._recommendation_pivot(profile_missing, opportunities)),
                 payload={
                     **payload,
                     "kind": "recommendation_pending",
                     "pending": True,
-                    "blocker": "PROFILE_REQUIRED" if profile is None or not profile.is_declared else "ELIGIBILITY_POLICY_REQUIRED",
+                    "blocker": "PROFILE_REQUIRED" if profile_missing else "ELIGIBILITY_POLICY_REQUIRED",
                     "service_status": "not_required",
                 },
                 llm=self._metadata(service_status="not_required"),

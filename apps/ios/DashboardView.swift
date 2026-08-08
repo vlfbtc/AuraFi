@@ -13,12 +13,9 @@ struct DashboardView: View {
             AuraChatView()
                 .tag(MainTab.aura)
                 .tabItem { Label("Aura", systemImage: "message") }
-            SimulationHubView()
-                .tag(MainTab.simulation)
-                .tabItem { Label("Simulação", systemImage: "chart.bar") }
-            ProtocolCatalogView()
-                .tag(MainTab.protocols)
-                .tabItem { Label("Protocolos", systemImage: "square.grid.2x2") }
+            ExploreView()
+                .tag(MainTab.explore)
+                .tabItem { Label("Explorar", systemImage: "square.grid.2x2") }
             HistoryView()
                 .tag(MainTab.history)
                 .tabItem { Label("Histórico", systemImage: "clock.arrow.circlepath") }
@@ -121,7 +118,7 @@ struct DashboardView: View {
                     .font(.title2.bold())
                     .foregroundStyle(AuraTheme.purple)
                 Spacer()
-                Button("Ver todas") { appModel.selectedTab = .protocols }
+                Button("Ver todas") { appModel.selectedTab = .explore }
                     .font(.subheadline.weight(.semibold))
             }
             HStack(alignment: .firstTextBaseline) {
@@ -409,13 +406,7 @@ struct AuraChatView: View {
                             }
                         }
                         if appModel.isSendingMessage {
-                            HStack {
-                                ProgressView().tint(.white)
-                                Text("A Aura está pensando…").font(.footnote)
-                                Spacer()
-                            }
-                            .foregroundStyle(.white.opacity(0.72))
-                            .accessibilityLabel("A Aura está preparando uma resposta")
+                            TypingBubble()
                         }
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }
@@ -541,6 +532,10 @@ private struct ChatBubble: View {
             Label("Enviada", systemImage: "checkmark")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.8))
+        case .delivered:
+            Label("Entregue", systemImage: "checkmark.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.85))
         case .failed:
             HStack(spacing: 8) {
                 Label("Não enviada", systemImage: "exclamationmark.circle")
@@ -562,122 +557,163 @@ private struct ChatBubble: View {
         switch deliveryState {
         case .sending: return "Enviando"
         case .sent: return "Enviada"
+        case .delivered: return "Entregue"
         case .failed: return "Falha no envio; é possível tentar novamente"
         case .received: return "Recebida"
         }
     }
 }
 
-struct SimulationHubView: View {
-    @EnvironmentObject private var appModel: AppModel
-    @State private var selectedOpportunity: Opportunity?
+private struct TypingBubble: View {
+    @State private var animating = false
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                AuraTheme.lavender.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("E se eu alocar…?")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundStyle(AuraTheme.purple)
-                        Text("Escolha uma oportunidade e projete cenários. Nenhuma alocação será executada.")
-                            .foregroundStyle(.secondary)
-                        if let simulation = appModel.lastSimulation {
-                            LastSimulationCard(simulation: simulation)
-                        }
-                        if appModel.opportunities.isEmpty {
-                            EmptyStateCard(
-                                title: "Sem oportunidades para simular",
-                                message: "Atualize os dados no Início para escolher uma oportunidade.",
-                                icon: "chart.bar.xaxis",
-                                actionTitle: "Ir para Início"
-                            ) { appModel.selectedTab = .dashboard }
-                        } else {
-                            Text("Escolha uma oportunidade").font(.title3.bold())
-                            ForEach(appModel.opportunities) { item in
-                                OpportunityCard(opportunity: item) { selectedOpportunity = item }
-                            }
-                        }
-                        DisclaimerCard()
-                    }
-                    .padding(18)
+        HStack {
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(.white.opacity(0.85))
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(animating ? 1.0 : 0.5)
+                        .opacity(animating ? 1.0 : 0.4)
+                        .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.2), value: animating)
                 }
             }
-            .navigationTitle("Simulação")
-            .sheet(item: $selectedOpportunity) { item in
-                SimulationView(opportunity: item).environmentObject(appModel)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AuraTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 16))
+            Spacer(minLength: 44)
         }
+        .onAppear { animating = true }
+        .accessibilityLabel("A Aura está preparando uma resposta")
     }
 }
 
-private struct LastSimulationCard: View {
-    let simulation: Simulation
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Último cenário").font(.headline)
-            Text(simulation.input.amountDisplay ?? assetAmount(simulation.input.amount, asset: simulation.input.asset))
-                .font(.title3.bold())
-            if let scenario = simulation.scenarios.max(by: { $0.horizonDays < $1.horizonDays }) {
-                Text("Em \(scenario.horizonDays) dias: + \(gainLabel(scenario, principal: simulation.input.amount))")
-                    .foregroundStyle(AuraTheme.success).font(.headline)
+struct ExploreView: View {
+    enum RiskFilter: String, CaseIterable, Identifiable {
+        case all = "Todos", low = "Baixo", medium = "Médio", high = "Alto"
+        var id: String { rawValue }
+        var level: String? {
+            switch self {
+            case .all: return nil
+            case .low: return "low"
+            case .medium: return "medium"
+            case .high: return "high"
             }
-            Text("Projeção educativa, sem execução.").font(.caption).foregroundStyle(.white.opacity(0.7))
         }
-        .foregroundStyle(.white)
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AuraTheme.purple, in: RoundedRectangle(cornerRadius: 16))
     }
-}
 
-struct ProtocolCatalogView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var search = ""
+    @State private var riskFilter: RiskFilter = .all
+    @State private var networkFilter: String?
     @State private var selectedOpportunity: Opportunity?
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AuraTheme.lavender.ignoresSafeArea()
-                if filtered.isEmpty {
-                    EmptyStateCard(
-                        title: search.isEmpty ? "Catálogo indisponível" : "Nenhum resultado",
-                        message: search.isEmpty ? "Atualize os dados para consultar protocolos e pools." : "Tente buscar por protocolo, ativo ou rede.",
-                        icon: "square.grid.2x2",
-                        actionTitle: search.isEmpty ? "Atualizar" : "Limpar busca"
-                    ) {
-                        if search.isEmpty { Task { await appModel.refreshOpportunities() } } else { search = "" }
-                    }
-                    .padding(18)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            if let source = appModel.marketSource { DataSourceBanner(source: source) }
-                            ForEach(filtered) { item in
-                                OpportunityCard(opportunity: item) { selectedOpportunity = item }
+                VStack(spacing: 0) {
+                    filters
+                    if filtered.isEmpty {
+                        EmptyStateCard(
+                            title: appModel.opportunities.isEmpty ? "Catálogo indisponível" : "Nenhum resultado",
+                            message: appModel.opportunities.isEmpty ? "Atualize os dados para explorar oportunidades." : "Ajuste a busca ou os filtros.",
+                            icon: "square.grid.2x2",
+                            actionTitle: appModel.opportunities.isEmpty ? "Atualizar" : "Limpar filtros"
+                        ) {
+                            if appModel.opportunities.isEmpty {
+                                Task { await appModel.refreshOpportunities() }
+                            } else {
+                                search = ""; riskFilter = .all; networkFilter = nil
                             }
                         }
                         .padding(18)
+                        Spacer(minLength: 0)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 12) {
+                                if let source = appModel.marketSource { DataSourceBanner(source: source) }
+                                ForEach(filtered) { item in
+                                    OpportunityCard(opportunity: item) { selectedOpportunity = item }
+                                }
+                            }
+                            .padding(18)
+                        }
+                        .refreshable { await appModel.refreshOpportunities() }
                     }
                 }
             }
-            .navigationTitle("Protocolos")
+            .navigationTitle("Explorar")
             .searchable(text: $search, prompt: "Protocolo, ativo ou rede")
-            .refreshable { await appModel.refreshOpportunities() }
             .sheet(item: $selectedOpportunity) { item in
                 OpportunityDetailView(opportunity: item).environmentObject(appModel)
             }
         }
     }
 
+    private var filters: some View {
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(RiskFilter.allCases) { option in
+                        chip(option.rawValue, selected: riskFilter == option) { riskFilter = option }
+                    }
+                }
+                .padding(.horizontal, 18)
+            }
+            if networks.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        chip("Todas as redes", selected: networkFilter == nil) { networkFilter = nil }
+                        ForEach(networks, id: \.self) { network in
+                            chip(network, selected: networkFilter == network) {
+                                networkFilter = networkFilter == network ? nil : network
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                }
+            }
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 13)
+                .frame(minHeight: 32)
+                .background(selected ? AuraTheme.pink : Color.white, in: Capsule())
+                .foregroundStyle(selected ? .white : AuraTheme.purple)
+                .overlay { Capsule().stroke(AuraTheme.border, lineWidth: selected ? 0 : 1) }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var networks: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for opportunity in appModel.opportunities {
+            let name = opportunity.blockchain.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty && seen.insert(name.lowercased()).inserted {
+                result.append(name)
+            }
+        }
+        return result
+    }
+
     private var filtered: [Opportunity] {
-        guard !search.isEmpty else { return appModel.opportunities }
         let query = search.localizedLowercase
-        return appModel.opportunities.filter {
-            $0.protocolName.localizedLowercase.contains(query)
-                || $0.asset.localizedLowercase.contains(query)
-                || $0.blockchain.localizedLowercase.contains(query)
+        return appModel.opportunities.filter { opportunity in
+            (riskFilter.level == nil || opportunity.risk.level == riskFilter.level)
+                && (networkFilter == nil || opportunity.blockchain.caseInsensitiveCompare(networkFilter!) == .orderedSame)
+                && (query.isEmpty
+                    || opportunity.protocolName.localizedLowercase.contains(query)
+                    || opportunity.asset.localizedLowercase.contains(query)
+                    || opportunity.blockchain.localizedLowercase.contains(query))
         }
     }
 }
@@ -707,10 +743,10 @@ struct HistoryView: View {
                         if filtered.isEmpty {
                             EmptyStateCard(
                                 title: "Ainda não há histórico aqui",
-                                message: "Sua primeira simulação salva ou recusada aparece nesta tela.",
+                                message: "Escolha uma oportunidade em Explorar e simule um cenário para registrar sua primeira decisão.",
                                 icon: "clock.arrow.circlepath",
-                                actionTitle: "Fazer uma simulação"
-                            ) { appModel.selectedTab = .simulation }
+                                actionTitle: "Explorar oportunidades"
+                            ) { appModel.selectedTab = .explore }
                         } else {
                             ForEach(filtered) { DecisionCard(decision: $0) }
                             LearningCard(decisions: appModel.decisions)
@@ -795,13 +831,14 @@ struct OpportunityDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         hero
-                        Text("Dados que importam").font(.title3.bold()).foregroundStyle(AuraTheme.purple)
+                        OpportunityExplainerCard(opportunity: currentOpportunity)
+                        Text("Números observados").font(.title3.bold()).foregroundStyle(AuraTheme.purple)
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                             if let scoreLabel {
                                 MetricCard(title: "RISCO", value: scoreLabel, detail: currentOpportunity.riskLabel)
                             }
                             if let primaryTVL {
-                                MetricCard(title: "TVL", value: primaryTVL, detail: secondaryTVL)
+                                MetricCard(title: "TVL", value: primaryTVL, detail: "total depositado no protocolo")
                             }
                             if let auditLabel {
                                 MetricCard(title: "AUDITORIA", value: auditLabel, detail: nil)
@@ -810,7 +847,6 @@ struct OpportunityDetailView: View {
                                 MetricCard(title: "REDE", value: currentOpportunity.blockchain, detail: liquidityLabel)
                             }
                         }
-                        OpportunityExplainerCard(opportunity: currentOpportunity)
                         if !currentOpportunity.risk.dimensions.isEmpty {
                             RiskDimensionsView(dimensions: currentOpportunity.risk.dimensions)
                         }
@@ -908,10 +944,10 @@ struct OpportunityDetailView: View {
     }
     private var primaryTVL: String? {
         if let display = currentOpportunity.currencyDisplay {
-            return display.primary.display ?? money(display.primary.value, currency: display.primary.currency)
+            return display.primary.displayCompact ?? compactMoney(display.primary.value, currency: display.primary.currency)
         }
         guard currentOpportunity.tvl.value.isFinite, currentOpportunity.tvl.value > 0 else { return nil }
-        return currentOpportunity.tvl.display ?? currentOpportunity.tvl.primaryMoneyLabel
+        return currentOpportunity.tvl.displayCompact ?? compactMoney(currentOpportunity.tvl.value, currency: currentOpportunity.tvl.currency ?? "USD")
     }
     private var secondaryTVL: String? {
         if let secondary = currentOpportunity.currencyDisplay?.secondary {
@@ -984,21 +1020,21 @@ private struct OpportunityExplainerCard: View {
         var result: [Point] = [
             Point(
                 icon: "percent",
-                title: "Rendimento (APY) — \(opportunity.apyLabel)",
-                detail: "É o rendimento anualizado observado agora. Ele oscila com o mercado e não é garantido."
+                title: "Rendimento de \(opportunity.apyLabel)",
+                detail: "É quanto renderia em um ano no ritmo de agora. Esse número muda com o mercado e não é garantido."
             ),
             Point(
                 icon: "building.columns",
-                title: "Tamanho (TVL)",
-                detail: "Quanto já está depositado no protocolo. Valores maiores costumam indicar mais uso e liquidez — mas não eliminam risco."
+                title: "Tamanho do protocolo (TVL)",
+                detail: "É quanto de dinheiro já está depositado aqui. Quanto maior, mais gente usando e mais fácil de entrar e sair. Não elimina o risco, mas ajuda."
             )
         ]
         switch opportunity.risk.level {
         case "low", "medium", "high":
             result.append(Point(
                 icon: "shield.lefthalf.filled",
-                title: "Risco observado — \(opportunity.riskLabel.lowercased())",
-                detail: "Reflete fatores como contrato inteligente, liquidez e ativo subjacente. Risco maior pode significar rendimento maior e perda maior."
+                title: "Risco \(opportunity.riskLabel.lowercased())",
+                detail: "Considera o contrato, a liquidez e o ativo por trás. Em geral, risco maior vem com chance de ganho maior e de perda maior."
             ))
         default:
             break
@@ -1006,17 +1042,17 @@ private struct OpportunityExplainerCard: View {
         result.append(Point(
             icon: "checkmark.seal",
             title: auditTitle,
-            detail: "Auditoria reduz — não elimina — o risco de falha no contrato. Quando não informada, apenas não temos esse dado da fonte."
+            detail: "Uma auditoria diminui, mas não elimina, o risco de falha no contrato. \"Não informada\" quer dizer que a fonte não trouxe esse dado."
         ))
         return result
     }
 
     private var auditTitle: String {
         switch opportunity.auditStatus {
-        case "audited": return "Auditoria — auditado"
-        case "partially_audited": return "Auditoria — parcial"
-        case "not_verified": return "Auditoria — não verificada"
-        default: return "Auditoria — não informada"
+        case "audited": return "Auditado por terceiros"
+        case "partially_audited": return "Auditoria parcial"
+        case "not_verified": return "Auditoria não verificada"
+        default: return "Auditoria não informada"
         }
     }
 }
