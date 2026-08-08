@@ -36,9 +36,6 @@ struct DashboardView: View {
                         header
                         TrustCard()
 
-                        // Only surface states that matter to the user: the live refresh in
-                        // progress and the offline/cached fallback. A successful update is the
-                        // expected outcome and should not leave a lingering banner.
                         if appModel.marketRefreshFeedback == .refreshing {
                             MarketRefreshIndicator(feedback: .refreshing)
                         } else if appModel.isUsingCachedMarket {
@@ -105,6 +102,18 @@ struct DashboardView: View {
         } ?? "você"
     }
 
+    private var marketFreshnessSubtitle: String {
+        if appModel.isRefreshingMarket {
+            return "Consultando os serviços de mercado…"
+        }
+        if let source = appModel.marketSource,
+           let time = shortTimeLabel(source.observedAt) ?? shortTimeLabel(source.retrievedAt) {
+            let origin = source.usefulSourceLabel.map { " · \($0)" } ?? ""
+            return "Atualizado às \(time)\(origin)"
+        }
+        return "Dados observados, riscos e fonte sempre visíveis."
+    }
+
     private var opportunitiesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -116,12 +125,16 @@ struct DashboardView: View {
                     .font(.subheadline.weight(.semibold))
             }
             HStack(alignment: .firstTextBaseline) {
-                Text("Dados observados, riscos e fonte sempre visíveis.")
+                Text(marketFreshnessSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button { Task { await appModel.refreshOpportunities() } } label: {
-                    Label("Atualizar", systemImage: "arrow.clockwise")
+                    if appModel.isRefreshingMarket {
+                        Label("Atualizando", systemImage: "arrow.clockwise")
+                    } else {
+                        Label("Atualizar", systemImage: "arrow.clockwise")
+                    }
                 }
                 .font(.caption.weight(.semibold))
                 .disabled(appModel.isRefreshingMarket)
@@ -276,8 +289,6 @@ struct OpportunityCard: View {
         [opportunity.blockchain, auditLabel].compactMap { $0 }.joined(separator: " · ")
     }
     private var compactTVL: String? {
-        // O BFF entrega o valor abreviado pronto; só formatamos localmente como
-        // fallback para caches antigos.
         if let primary = opportunity.currencyDisplay?.primary,
            primary.value.isFinite,
            primary.value > 0 {
@@ -799,6 +810,7 @@ struct OpportunityDetailView: View {
                                 MetricCard(title: "REDE", value: currentOpportunity.blockchain, detail: liquidityLabel)
                             }
                         }
+                        OpportunityExplainerCard(opportunity: currentOpportunity)
                         if !currentOpportunity.risk.dimensions.isEmpty {
                             RiskDimensionsView(dimensions: currentOpportunity.risk.dimensions)
                         }
@@ -932,6 +944,83 @@ struct OpportunityDetailView: View {
     }
 }
 
+private struct OpportunityExplainerCard: View {
+    let opportunity: Opportunity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Entenda esta oportunidade")
+                .font(.headline)
+                .foregroundStyle(AuraTheme.purple)
+            ForEach(points, id: \.title) { point in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: point.icon)
+                        .font(.subheadline)
+                        .foregroundStyle(AuraTheme.pink)
+                        .frame(width: 22)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(point.title).font(.subheadline.weight(.semibold)).foregroundStyle(AuraTheme.purple)
+                        Text(point.detail).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Text("Compare com outras oportunidades e converse com a Aura antes de decidir. Você decide; a AuraFi explica.")
+                .font(.caption.italic())
+                .foregroundStyle(AuraTheme.pink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AuraTheme.pink.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).stroke(AuraTheme.pink.opacity(0.25)) }
+        .accessibilityElement(children: .contain)
+    }
+
+    private struct Point { let icon: String; let title: String; let detail: String }
+
+    private var points: [Point] {
+        var result: [Point] = [
+            Point(
+                icon: "percent",
+                title: "Rendimento (APY) — \(opportunity.apyLabel)",
+                detail: "É o rendimento anualizado observado agora. Ele oscila com o mercado e não é garantido."
+            ),
+            Point(
+                icon: "building.columns",
+                title: "Tamanho (TVL)",
+                detail: "Quanto já está depositado no protocolo. Valores maiores costumam indicar mais uso e liquidez — mas não eliminam risco."
+            )
+        ]
+        switch opportunity.risk.level {
+        case "low", "medium", "high":
+            result.append(Point(
+                icon: "shield.lefthalf.filled",
+                title: "Risco observado — \(opportunity.riskLabel.lowercased())",
+                detail: "Reflete fatores como contrato inteligente, liquidez e ativo subjacente. Risco maior pode significar rendimento maior e perda maior."
+            ))
+        default:
+            break
+        }
+        result.append(Point(
+            icon: "checkmark.seal",
+            title: auditTitle,
+            detail: "Auditoria reduz — não elimina — o risco de falha no contrato. Quando não informada, apenas não temos esse dado da fonte."
+        ))
+        return result
+    }
+
+    private var auditTitle: String {
+        switch opportunity.auditStatus {
+        case "audited": return "Auditoria — auditado"
+        case "partially_audited": return "Auditoria — parcial"
+        case "not_verified": return "Auditoria — não verificada"
+        default: return "Auditoria — não informada"
+        }
+    }
+}
+
 private struct MetricCard: View {
     let title: String
     let value: String
@@ -1028,7 +1117,6 @@ private struct OpportunityHistoryView: View {
     }
 
     private var sourceLabel: String? {
-        // Rótulo já higienizado pelo BFF; fallback local apenas para caches antigos.
         if let label = history.dataSource.serverSourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
            !label.isEmpty {
             return label
@@ -1338,8 +1426,19 @@ private func assetAmount(_ value: Double, asset: String) -> String {
     "\(value.formatted(.number.locale(Locale(identifier: "pt_BR")).precision(.fractionLength(0...2)))) \(asset)"
 }
 
-/// Ganho projetado como montante ("+ X ATIVO"). Prefere a string pronta do BFF;
-/// como fallback, deriva do valor projetado menos o principal.
+private func shortTimeLabel(_ iso: String) -> String? {
+    let trimmed = iso.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    guard let date = withFraction.date(from: trimmed) ?? plain.date(from: trimmed) else {
+        return nil
+    }
+    return date.formatted(.dateTime.hour().minute().locale(Locale(identifier: "pt_BR")))
+}
+
 private func gainLabel(_ scenario: SimulationScenario, principal: Double) -> String {
     scenario.projectedGainDisplay ?? assetAmount(scenario.projectedValue - principal, asset: scenario.currency)
 }

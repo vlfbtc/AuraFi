@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-if __package__ in {None, ""}:  # permite `python services/api/cli.py` em Python embutido
+if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from services.api.app import API_VERSION, DEFAULT_HOST, DEFAULT_PORT, create_app
     from services.api.server import create_server

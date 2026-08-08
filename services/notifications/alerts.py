@@ -131,8 +131,6 @@ class AlertDataSource:
         return result
 
 
-# The market-data service uses the same public vocabulary.  The alias keeps
-# this package independent from that service while accepting its metadata.
 DataSourceMetadata = AlertDataSource
 DataSource = AlertDataSource
 
@@ -224,8 +222,8 @@ class ApyChangeRule:
     """Explicit APY threshold; no threshold is ever supplied by this module."""
 
     threshold: float | None = None
-    threshold_kind: str | None = None  # absolute points or relative ratio
-    direction: str | None = None  # increase, decrease, any
+    threshold_kind: str | None = None
+    direction: str | None = None
     enabled: bool = True
 
     def __post_init__(self) -> None:

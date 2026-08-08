@@ -1,11 +1,3 @@
-/**
- * Cliente HTTP opcional do Web Widget.
- *
- * A aplicação usa a API por padrão. Dados de demonstração só podem ser
- * habilitados explicitamente com VITE_ALLOW_DEMO_DATA=true.
- * Quando uma URL é fornecida, o fallback de demonstração continua desligado
- * por padrão; erros de negócio (4xx) e falhas de transporte permanecem visíveis.
- */
 
 export type ApiMode = 'fixture' | 'api' | 'api-with-fixture-fallback';
 export type Channel = 'web_widget' | 'ios_app' | 'simulated';
@@ -88,7 +80,6 @@ export interface DataSource {
   readOnly: true;
   isStale: boolean;
   freshnessNote?: string;
-  // Rótulos prontos para exibição fornecidos pelo BFF (já higienizados).
   sourceLabel?: string;
   statusLabel?: string;
 }
@@ -127,7 +118,6 @@ export interface SimulationInput {
   asset: string;
   horizonsDays: SimulationHorizon[];
   compareIdleStablecoin?: boolean;
-  // Presente apenas na resposta; formatado pelo BFF.
   amountDisplay?: string;
 }
 
@@ -667,7 +657,7 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
     ),
   };
 
-  return methods;
+  return { ...methods, mode };
 }
 
 const toQuery = (params: Record<string, string | number | boolean | undefined>): string => {

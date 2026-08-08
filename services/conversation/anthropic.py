@@ -31,6 +31,16 @@ Não invente APY, TVL, auditoria, risco, saldo ou resultado de simulação. Quan
 faltarem dados verificáveis, diga isso claramente. Recomendações e simulações são
 produzidas por serviços determinísticos separados, nunca por esta conversa."""
 
+
+def _system_prompt(request: LlmRequest) -> str:
+    """Prompt de sistema com os dados de mercado observados quando disponíveis."""
+    grounding = getattr(request, "grounding", "") or ""
+    grounding = grounding.strip()
+    if not grounding:
+        return SYSTEM_PROMPT
+    return f"{SYSTEM_PROMPT}\n\n{grounding[:6_000]}"
+
+
 def _conversation_messages(request: LlmRequest) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for item in request.context[-12:]:
@@ -217,13 +227,9 @@ class AnthropicLlm:
         payload = {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
-            "system": SYSTEM_PROMPT,
+            "system": _system_prompt(request),
             "messages": _conversation_messages(request),
         }
-        # Sonnet 5 habilita raciocínio adaptativo por padrão e contabiliza
-        # esses tokens dentro de max_tokens. O hub precisa de respostas curtas
-        # e previsíveis; desabilitar thinking evita truncar o texto com o
-        # orçamento editorial de 700 tokens.
         if self.config.model == "claude-sonnet-5":
             payload["thinking"] = {"type": "disabled"}
         response = self._post_json(

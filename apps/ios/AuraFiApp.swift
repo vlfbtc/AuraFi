@@ -277,8 +277,6 @@ final class AppModel: ObservableObject {
             self.session = stored
             self.email = stored.email
             self.flow = .dashboard
-            // A restored session on cold launch must pass the biometric gate
-            // before any account data is shown, when the device supports it.
             if self.biometricLockEnabled, biometrics.availableBiometry != .none {
                 self.isLocked = true
             }
@@ -360,7 +358,6 @@ final class AppModel: ObservableObject {
                     self.flow = .riskQuiz
                 }
             } catch {
-                // Authentication already succeeded. A profile outage must not be shown as an OTP failure.
                 self.flow = .dashboard
             }
         } catch {
@@ -372,13 +369,10 @@ final class AppModel: ObservableObject {
         otpError = nil
     }
 
-    // MARK: - Biometric lock
 
     var biometricKind: BiometricKind { biometrics.availableBiometry }
     var biometricsAvailable: Bool { biometrics.availableBiometry != .none }
 
-    /// Re-engage the lock when the app leaves the foreground, so returning to a
-    /// backgrounded session requires biometric confirmation again.
     func lockIfNeeded() {
         guard session != nil, biometricLockEnabled, biometricsAvailable else { return }
         isLocked = true
@@ -391,8 +385,6 @@ final class AppModel: ObservableObject {
         case .success:
             isLocked = false
         case .failure(.unavailable):
-            // Hardware/enrollment vanished (e.g. passcode removed) — never trap
-            // the user behind a gate that can no longer be satisfied.
             isLocked = false
         case .failure(.cancelled), .failure(.failed):
             break
@@ -485,9 +477,7 @@ final class AppModel: ObservableObject {
     }
 
     private func minimumRefreshDuration() async {
-        // Hold the pull-to-refresh spinner long enough to read as intentional loading
-        // instead of snapping back the instant a fast success or fast failure returns.
-        try? await Task.sleep(nanoseconds: 900_000_000)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
     }
 
     func restoreSessionIfNeeded() async {
@@ -606,8 +596,6 @@ final class AppModel: ObservableObject {
         auraFallbackMessage = nil
         if conversation == nil { await ensureConversation() }
         guard let conversation else {
-            // The inline "não enviada · tentar novamente" chip on the bubble is the single,
-            // clear signal here — don't also raise a redundant top-of-thread banner.
             auraFallbackMessage = nil
             markMessageFailed(id: id)
             persistChatState()
@@ -638,8 +626,6 @@ final class AppModel: ObservableObject {
             }
             persistChatState()
         } catch {
-            // Keep the failure attached to the specific message (retryable) rather than
-            // surfacing a separate banner that competes with the bubble's own state.
             auraFallbackMessage = nil
             markMessageFailed(id: id)
             persistChatState()
@@ -690,8 +676,6 @@ final class AppModel: ObservableObject {
     }
 
     func recordDecision(for opportunity: Opportunity, amount: Double, outcome: DecisionRecord.Outcome) {
-        // O histórico exibe este valor como montante ("+ X ATIVO"); portanto é o
-        // ganho projetado, não o percentual (projected_yield é percentual).
         let longestScenario = lastSimulation?.scenarios.max(by: { $0.horizonDays < $1.horizonDays })
         let projectedYield = longestScenario?.projectedGain
             ?? longestScenario.map { $0.projectedValue - amount }
@@ -796,9 +780,6 @@ struct RootView: View {
     }
 }
 
-/// Full-screen gate shown over the dashboard until biometrics confirm the user.
-/// Auto-prompts on appearance and offers an explicit retry plus a sign-out
-/// escape hatch so the user is never stuck.
 struct BiometricLockView: View {
     @EnvironmentObject private var appModel: AppModel
 

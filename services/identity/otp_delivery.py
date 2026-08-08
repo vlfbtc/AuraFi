@@ -221,8 +221,6 @@ class SmtpOtpDelivery(OtpDeliveryPort):
                     client.login(self.config.username, self.config.password)
                 client.send_message(email)
         except (OSError, smtplib.SMTPException):
-            # Keep transport errors deliberately generic: SMTP exceptions must
-            # never place credentials or OTP contents in application logs.
             raise OtpDeliveryTransportError("SMTP OTP delivery failed") from None
 
 

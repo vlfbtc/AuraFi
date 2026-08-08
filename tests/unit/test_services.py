@@ -163,7 +163,7 @@ class IdentityDomainTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "AUTHENTICATION_FAILED")
         self.assertNotIn("123456", raised.exception.message)
-        stored = service._challenges.get(challenge.challenge_id)  # adapter de memória controlado
+        stored = service._challenges.get(challenge.challenge_id)
         self.assertEqual(stored.attempts, 1)
         self.assertEqual(sink.code_for(challenge.challenge_id), "123456")
 
@@ -177,8 +177,6 @@ class IdentityDomainTests(unittest.TestCase):
             service.verify_otp(challenge.challenge_id, sink.code_for(challenge.challenge_id) or "")
         self.assertEqual(service._challenges.get(challenge.challenge_id).status, "expired")
 
-        # Um segundo desafio prova uso único: depois de verificado, o mesmo OTP
-        # não cria uma nova sessão em retry.
         clock.value = NOW
         service._otp_generator = SequenceGenerator("654321")
         second = service.request_otp("maria@example.com", "web_widget")
@@ -201,7 +199,7 @@ class IdentityDomainTests(unittest.TestCase):
         self.assertNotEqual(ios.channel_association.channel.name, web.channel_association.channel.name)
 
         other = Account("acc-2", "other@example.com", created_at=NOW)
-        service._accounts.add(other)  # fixture in-memory, sem banco
+        service._accounts.add(other)
         foreign = service.associate_channel("acc-2", "simulated")
         with self.assertRaises(AuthenticationError):
             service.resolve_session(auth.session.access_token, channel_identity_id=foreign.channel_identity_id)
@@ -646,6 +644,114 @@ class SimulationAndConversationTests(unittest.TestCase):
         self.assertEqual(first.user_message.message_id, replay.user_message.message_id)
         self.assertEqual(first.assistant_message.message_id, replay.assistant_message.message_id)
         self.assertTrue(replay.metadata["idempotent_replay"])
+
+    def test_llm_recebe_dados_de_mercado_observados_como_grounding(self) -> None:
+        """A Aura deve receber as oportunidades observadas; sem isso ela responde
+        que "não tem acesso a dados de mercado em tempo real"."""
+
+        class RecordingProvider:
+            def __init__(self) -> None:
+                self.request = None
+
+            def complete(self, request):
+                self.request = request
+                return LlmResult(
+                    "Considerando lido STETH, observe risco de contrato e liquidez.",
+                    mode="provider",
+                    provider="claude",
+                )
+
+        class _FakeSource:
+            def to_dict(self):
+                return {
+                    "source": "defillama",
+                    "observed_at": "2026-08-07T10:00:00Z",
+                    "is_stale": False,
+                }
+
+        class _FakeSnapshot:
+            items = [
+                {
+                    "opportunity_id": "lido-steth",
+                    "protocol": "lido",
+                    "asset": "STETH",
+                    "blockchain": "Ethereum",
+                    "apy": {"value": 2.18},
+                    "tvl": {"value": 18_000_000_000, "currency": "USD"},
+                    "risk": {"level": "medium", "dimensions": ["smart_contract"]},
+                    "audit_status": "unknown",
+                }
+            ]
+            data_source = _FakeSource()
+
+        class FakeMarket:
+            def read_opportunities(self, *, mode="auto"):
+                return _FakeSnapshot()
+
+        identity, token, consent = self._authenticated_conversation()
+        provider = RecordingProvider()
+        service = ConversationService(
+            identity=identity,
+            llm=provider,
+            market_data_port=FakeMarket(),
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("grounding"),
+        )
+        created = service.create_conversation(token, "simulated", consent)
+        service.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest(
+                "Quais riscos devo observar nas oportunidades atuais?",
+                "simulated",
+                consent,
+            ),
+        )
+
+        self.assertIsNotNone(provider.request)
+        grounding = provider.request.grounding
+        self.assertIn("DeFiLlama", grounding)
+        self.assertIn("lido · STETH · Ethereum", grounding)
+        self.assertIn("2,18% a.a.", grounding)
+        self.assertIn("US$ 18,0 bi", grounding)
+        self.assertIn("2026-08-07T10:00:00Z", grounding)
+
+    def test_grounding_inclui_perfil_de_risco_declarado(self) -> None:
+        """A Aura deve receber o perfil declarado para adaptar o tom, sem cruzar
+        a fronteira de recomendação personalizada."""
+
+        class RecordingProvider:
+            def __init__(self) -> None:
+                self.request = None
+
+            def complete(self, request):
+                self.request = request
+                return LlmResult("Para o seu perfil, observe estes riscos.", mode="provider", provider="claude")
+
+        class _FakeProfile:
+            is_declared = True
+            declared_profile = "moderate"
+
+        identity, token, consent = self._authenticated_conversation()
+        provider = RecordingProvider()
+        service = ConversationService(
+            identity=identity,
+            llm=provider,
+            profile_port=lambda account_id: _FakeProfile(),
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("profile-grounding"),
+        )
+        created = service.create_conversation(token, "simulated", consent)
+        service.send_message(
+            token,
+            created.conversation.conversation_id,
+            MessageRequest("Explique os riscos para mim.", "simulated", consent),
+        )
+
+        grounding = provider.request.grounding
+        self.assertIn("PERFIL DE RISCO DECLARADO", grounding)
+        self.assertIn("moderado", grounding)
+        self.assertIn("Não faça recomendação personalizada", grounding)
 
     def test_provider_output_requesting_secrets_is_replaced_by_safe_faq(self) -> None:
         class UnsafeProvider:

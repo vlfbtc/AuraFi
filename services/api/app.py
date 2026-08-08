@@ -712,8 +712,6 @@ class AuraFiApp:
     def _build_market_adapter(self) -> DeFiLlamaAdapter:
         """Cria o adapter; producao usa live, local exige opt-in de rede."""
 
-        # Produção sempre aponta para a fonte live; a rede não pode ser
-        # desabilitada nessa camada e fazer o app recorrer a dados sintéticos.
         allow_network = self.is_production or _env_flag("AURAFI_ENABLE_MARKET_NETWORK")
         base_url = (
             os.environ.get("AURAFI_MARKET_BASE_URL") or DEFAULT_MARKET_BASE_URL
@@ -974,8 +972,6 @@ class AuraFiApp:
             declared_at=utc_now(),
         )
         if self.persistence is not None:
-            # O schema exige a conta referenciada antes do perfil; isso nao
-            # altera o fluxo de identidade, apenas satisfaz a FK do SQLite.
             if self.persistence.get_account(resolved.account.account_id) is None:
                 self.persistence.save_account(resolved.account.to_dict())
             self.persistence.save_risk_profile(
@@ -1029,8 +1025,6 @@ class AuraFiApp:
         for item, display in zip(page_source_items, displays, strict=True):
             payload = item.to_dict()
             payload["currency_display"] = display
-            # O BFF entrega valores prontos para exibição e higieniza sentinelas
-            # internas; o cliente apenas renderiza.
             page_items.append(decorate_opportunity(payload))
         meta = self._meta(request).to_dict()
         meta["data_sources"] = [snapshot.data_source.to_dict()]
@@ -1073,7 +1067,6 @@ class AuraFiApp:
         simulation = self.simulation.simulate(simulation_input)
         meta = self._meta(request).to_dict()
         meta["data_sources"] = [opportunity.data_source.to_dict()]
-        # O BFF entrega os valores da simulação prontos para exibição.
         return Response(201, {"simulation": decorate_simulation(simulation.to_dict()), "meta": meta})
 
     def _opportunity_detail(
@@ -1164,7 +1157,7 @@ class AuraFiApp:
         message = MessageRequest.from_mapping(data, default_channel=data.get("channel"))
         correlation_id = request.provided_correlation_id
         if correlation_id is None:
-            conversation_record = self.conversation._repository.get(conversation_id)  # local adapter
+            conversation_record = self.conversation._repository.get(conversation_id)
             correlation_id = conversation_record.correlation_id if conversation_record else None
         if message.channel == "simulated":
             transport = {

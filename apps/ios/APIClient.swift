@@ -79,8 +79,6 @@ struct APIDataSource: Codable, Equatable {
     let readOnly: Bool
     let isStale: Bool
     let freshnessNote: String?
-    /// Rótulos prontos para exibição fornecidos pelo BFF, já higienizados de
-    /// sentinelas internas. O cliente prefere estes ao invés de formatar/filtrar.
     let serverSourceLabel: String?
     let serverStatusLabel: String?
 
@@ -101,8 +99,6 @@ struct APIDataSource: Codable, Equatable {
         usefulSourceLabel ?? "Indisponível"
     }
 
-    /// O BFF entrega `source_label` já limpo; só há fallback local para caches
-    /// antigos anteriores a esse contrato.
     var usefulSourceLabel: String? {
         if let label = serverSourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
            !label.isEmpty {
@@ -289,7 +285,6 @@ struct APIMarketValue: Codable {
     let unit: String?
     let currency: String?
     let observedAt: String
-    /// Strings prontas para exibição fornecidas pelo BFF (o cliente não formata).
     let display: String?
     let displayCompact: String?
 
@@ -633,10 +628,7 @@ struct SimulationScenario: Decodable, Identifiable {
     let projectedYield: Double
     let idleStablecoinValue: Double?
     let currency: String
-    /// Ganho em montante (projected_value − principal), derivado pelo BFF.
     let projectedGain: Double?
-    /// Strings prontas para exibição fornecidas pelo BFF. `projectedYield` é
-    /// percentual acumulado; o "+" dos cards usa `projectedGain` (montante).
     let projectedValueDisplay: String?
     let projectedYieldDisplay: String?
     let projectedGainDisplay: String?
@@ -896,7 +888,6 @@ struct AuraFiAPIClient {
         )
     }
 
-    /// GET /v1/opportunities using the app session token.
     func listOpportunities(
         sessionToken: String,
         page: Int = 1,

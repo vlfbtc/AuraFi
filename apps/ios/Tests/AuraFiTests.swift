@@ -223,7 +223,6 @@ final class AuraFiTests: XCTestCase {
         XCTAssertEqual(response.opportunity.currencyDisplay?.primary.currency, "BRL")
         XCTAssertEqual(response.opportunity.currencyDisplay?.secondary?.currency, "USD")
         XCTAssertEqual(response.opportunity.history?.windows["7d"]?.apy?.average, 5.2)
-        // O cliente renderiza as strings prontas do BFF, sem formatar localmente.
         XCTAssertEqual(response.opportunity.apyLabel, "5,20% a.a.")
         XCTAssertEqual(response.opportunity.tvlLabel, "US$ 1.000,00")
         XCTAssertEqual(response.opportunity.dataSource.usefulSourceLabel, "DeFiLlama")
@@ -231,7 +230,6 @@ final class AuraFiTests: XCTestCase {
     }
 
     func testSimulationScenarioSeparatesPercentYieldFromGainAmount() throws {
-        // projected_yield é percentual; o ganho em montante vem em projected_gain.
         let json = Data(
             """
             {
@@ -264,9 +262,6 @@ final class AuraFiTests: XCTestCase {
     }
 
     func testDataSourcePrefersBFFProvidedDisplayLabels() {
-        // A higienização de sentinelas passou a ser responsabilidade do BFF
-        // (ver tests/unit/test_presentation.py). O cliente consome os rótulos
-        // prontos que o backend entrega.
         let source = APIDataSource(
             source: "defillama",
             mode: "live",

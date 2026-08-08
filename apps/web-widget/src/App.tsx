@@ -122,7 +122,7 @@ interface DecisionRecord {
   formulaVersion: string;
 }
 
-const ALLOW_DEMO_DATA = import.meta.env.VITE_ALLOW_DEMO_DATA === 'true';
+const IS_FIXTURE_MODE = widgetApi.mode === 'fixture';
 
 const questions: readonly Question[] = [
   {
@@ -357,7 +357,6 @@ function writeLocalArray<T>(key: string, value: readonly T[]): void {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // O widget continua navegável quando o armazenamento do browser não está disponível.
   }
 }
 
@@ -527,7 +526,7 @@ export default function App() {
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [decisionMessage, setDecisionMessage] = useState<string | null>(null);
   const [isEducationOpen, setIsEducationOpen] = useState(false);
-  const [dashboardOpportunities, setDashboardOpportunities] = useState<SyntheticOpportunity[]>(() => ALLOW_DEMO_DATA ? [...opportunities] : []);
+  const [dashboardOpportunities, setDashboardOpportunities] = useState<SyntheticOpportunity[]>(() => IS_FIXTURE_MODE ? [...opportunities] : []);
   const [opportunityState, setOpportunityState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [opportunityError, setOpportunityError] = useState<string | null>(null);
   const [opportunityMeta, setOpportunityMeta] = useState<ApiMeta | null>(null);
@@ -1027,7 +1026,6 @@ export default function App() {
     try {
       if (accessToken) await apiClient.logout({ requestId: `widget_logout_${Date.now()}` });
     } catch {
-      // A limpeza local é obrigatória mesmo se a API já estiver indisponível.
     } finally {
       restart();
       setIsSubmitting(false);
@@ -1143,7 +1141,7 @@ export default function App() {
         <div className="field-group">
           <label htmlFor="otp">Código de acesso</label>
           <input id="otp" name="otp" className="otp-input" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="000000" value={otp} onChange={(event) => { setOtp(event.target.value.replace(/\D/g, '').slice(0, 6)); clearError(); }} aria-invalid={errorContext === 'otp' && Boolean(errorKind)} aria-describedby={errorContext === 'otp' && errorKind ? 'otp-hint otp-error' : 'otp-hint'} required />
-          <span id="otp-hint" className="field-hint">O código expira em 5 minutos.{ALLOW_DEMO_DATA ? ' Para a demonstração, use 123456.' : ''}</span>
+          <span id="otp-hint" className="field-hint">O código expira em 5 minutos.{IS_FIXTURE_MODE ? ' Para a demonstração, use 123456.' : ''}</span>
         </div>
         {errorContext === 'otp' && errorKind ? <InlineAlert id="otp-error" message={getErrorMessage(errorKind, 'otp')} {...(errorKind === 'network' ? { onRetry: handleResendOtp } : {})} /> : null}
         <button className="primary-button full-width" type="submit" disabled={isSubmitting}>

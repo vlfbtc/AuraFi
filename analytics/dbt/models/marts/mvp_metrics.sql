@@ -1,16 +1,6 @@
 {{ config(materialized='view') }}
 
-/*
-  MVP metrics for the synthetic DW fixture.
-
-  The model deliberately keeps each fact at its native grain before
-  aggregating. No fact-to-fact join is used except the explicit
-  previous_session_id link needed to prove cross-channel continuity.
-
-  Output grain:
-    one row per metric_name, calendar_date and applicable breakdown
-    (channel/profile, channel pair, source/mode, or fixture day).
-*/
+/* One row per metric_name, calendar_date and applicable breakdown. */
 with recommendation_base as (
     select
         f.recommendation_key,

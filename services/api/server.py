@@ -107,7 +107,7 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
             )
             response = self._app.handle(request)
         except RequestBodyError as exc:
-            response = self._app._error_response(  # local transport error, same envelope
+            response = self._app._error_response(
                 Request(method, self.path, request_headers, None, source_ip=self._source_ip),
                 exc.status,
                 exc.code,
@@ -184,7 +184,6 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(encoded)
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Nao registrar headers ou corpo: evita vazamento acidental de token/OTP.
         super().log_message("%s", format % args)
 
     @property

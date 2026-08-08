@@ -177,6 +177,7 @@ class LlmRequest:
     conversation_id: str
     action: str | None = None
     context: tuple[Mapping[str, Any], ...] = ()
+    grounding: str = ""
 
     def __post_init__(self) -> None:
         if not self.text.strip():
@@ -244,7 +245,6 @@ class DeterministicMockLlm:
         )
 
 
-# Nome curto para consumidores que preferem a nomenclatura de teste.
 MockLlm = DeterministicMockLlm
 
 
@@ -667,8 +667,6 @@ class ConversationService:
         if self._identity is None:
             raise ValueError("IdentityService é obrigatório")
         self._repository = repository or InMemoryConversationRepository()
-        # A recomendação sempre passa pelo guardrail oficial, mesmo quando o
-        # integrador não fornece uma política/perfil: o resultado será pending.
         self._recommendation = recommendation_service or recommendation or RecommendationService()
         self._simulation = simulation_service or simulation
         self._profile_port = profile_port
@@ -755,7 +753,6 @@ class ConversationService:
             self._repository.update(conversation)
         return ConversationResponse(conversation, resolved.meta)
 
-    # Alias used by adapters that model the operation as start().
     start_conversation = create_conversation
 
     def get_conversation(
@@ -794,9 +791,6 @@ class ConversationService:
         correlation_id: str | None = None,
         channel_identity_id: str | None = None,
     ) -> MessageResponse:
-        # Serializa compare-and-append no processo. O adapter persistente ainda
-        # mantém sua própria transação; assim retries concorrentes não chamam o
-        # provedor duas vezes para o mesmo external_message_id.
         with self._message_lock:
             conversation = self._repository.get(conversation_id)
             if conversation is None:
@@ -910,7 +904,6 @@ class ConversationService:
                 resolved.meta,
             )
 
-    # Common naming for channel adapters.
     handle_message = send_message
     process_message = send_message
 
@@ -1037,8 +1030,6 @@ class ConversationService:
             return self._answer_simulation(request)
         if action in {"recommend", "discover"}:
             return self._answer_recommendation(resolved, conversation, request, action)
-        # Explicar, comparar critérios e responder perguntas educativas não
-        # depende de suitability. A política só governa sugestões pessoais.
         return self._answer_llm(resolved, conversation, request, action)
 
     def _answer_llm(
@@ -1053,6 +1044,7 @@ class ConversationService:
             account_id=resolved.account.account_id,
             conversation_id=conversation.conversation_id,
             action=action,
+            grounding=self._aura_grounding(resolved.account.account_id),
             context=(
                 tuple(
                     {
@@ -1301,9 +1293,6 @@ class ConversationService:
 
     @staticmethod
     def _authorize(conversation: ConversationRecord, resolved: ResolvedIdentity) -> None:
-        # A conversa pertence à conta canônica, não a um token específico.
-        # Isso permite retomada segura após rotação de sessão e em outro canal;
-        # um token de outra conta continua recebendo 404 para não enumerar IDs.
         if conversation.account_id != resolved.account.account_id:
             raise ConversationNotFoundError()
 
@@ -1322,6 +1311,106 @@ class ConversationService:
             return self._policy_port(account_id)
         getter = getattr(self._policy_port, "get_policy", None) or getattr(self._policy_port, "get", None)
         return getter(account_id) if callable(getter) else None
+
+    def _aura_grounding(self, account_id: str) -> str:
+        """Contexto factual (perfil do usuário + mercado observado) para aterrar a Aura.
+
+        Sem esse contexto o provider responde que "não tem acesso a dados de
+        mercado em tempo real". Aqui injetamos o perfil declarado e os dados
+        observados (fonte DeFiLlama) como verdade verificável, sem inventar
+        valores e sem cruzar a fronteira de recomendação personalizada.
+        """
+        sections: list[str] = []
+
+        profile_section = self._profile_grounding(account_id)
+        if profile_section:
+            sections.append(profile_section)
+
+        market_section = self._market_grounding_section(account_id)
+        if market_section:
+            sections.append(market_section)
+
+        return "\n\n".join(sections)
+
+    def _profile_grounding(self, account_id: str) -> str:
+        try:
+            profile = self._get_profile(account_id)
+        except Exception:
+            return ""
+        if profile is None or not getattr(profile, "is_declared", False):
+            return (
+                "PERFIL DO USUÁRIO: ainda não declarado. Se ele pedir algo "
+                "dependente de perfil, sugira concluir o questionário de risco."
+            )
+        labels = {
+            "conservative": "conservador",
+            "moderate": "moderado",
+            "aggressive": "arrojado",
+        }
+        raw = str(getattr(profile, "declared_profile", "") or "")
+        label = labels.get(raw, raw or "não informado")
+        return (
+            f"PERFIL DE RISCO DECLARADO PELO USUÁRIO: {label}. "
+            "Ajuste o tom e destaque os riscos e trade-offs relevantes a esse "
+            "perfil. Não faça recomendação personalizada de alocação nem diga o "
+            "quanto alocar — sugestões pessoais cabem ao serviço dedicado; aqui "
+            "você apenas explica e compara de forma educativa."
+        )
+
+    def _market_grounding_section(self, account_id: str) -> str:
+        from services.market_data.presentation import (
+            format_money_compact,
+            format_percent,
+        )
+
+        try:
+            opportunities, data_sources = self._get_opportunities(account_id)
+        except Exception:
+            return ""
+        if not opportunities:
+            return ""
+        lines: list[str] = []
+        for opp in opportunities[:6]:
+            attributes = opp.attributes if isinstance(opp.attributes, Mapping) else {}
+            protocol = str(attributes.get("protocol", "")).strip()
+            asset = str(attributes.get("asset", "")).strip()
+            chain = str(attributes.get("blockchain", "")).strip()
+            head = " · ".join(part for part in (protocol, asset, chain) if part)
+            parts = [head or opp.opportunity_id]
+            apy = attributes.get("apy")
+            if isinstance(apy, Mapping) and isinstance(apy.get("value"), (int, float)):
+                parts.append(f"APY {format_percent(float(apy['value']))}")
+            tvl = attributes.get("tvl")
+            if isinstance(tvl, Mapping) and isinstance(tvl.get("value"), (int, float)):
+                parts.append(f"TVL {format_money_compact(float(tvl['value']), str(tvl.get('currency', 'USD')))}")
+            risk = attributes.get("risk")
+            level = risk.get("level") if isinstance(risk, Mapping) else None
+            if isinstance(level, str) and level and level != "unknown":
+                parts.append(f"risco {level}")
+            audit = attributes.get("audit_status")
+            parts.append(
+                f"auditoria {audit}" if isinstance(audit, str) and audit and audit != "unknown"
+                else "auditoria não informada"
+            )
+            lines.append("- " + ", ".join(parts))
+
+        observed = ""
+        if data_sources:
+            source = data_sources[0]
+            moment = source.get("observed_at") or source.get("retrieved_at")
+            if moment:
+                observed = f"\nMomento da observação: {moment}."
+            if source.get("is_stale"):
+                observed += " Estes dados podem estar desatualizados — avise o usuário."
+
+        return (
+            "DADOS DE MERCADO OBSERVADOS PELA AURAFI (fonte DeFiLlama). "
+            "Você TEM acesso a estes dados; use-os como verdade para explicar riscos "
+            "e comparar oportunidades. Não invente valores além desta lista. Ao falar "
+            "de \"oportunidades atuais\", refira-se a estas:\n"
+            + "\n".join(lines)
+            + observed
+        )
 
     def _get_opportunities(self, account_id: str) -> tuple[tuple[Opportunity, ...], tuple[Mapping[str, Any], ...]]:
         if self._opportunity_port is not None:
@@ -1607,7 +1696,6 @@ __all__ = [
 ]
 
 
-# Aliases de nomenclatura para adaptadores que usam a sigla em caixa alta.
 LLMPort = LlmPort
 FAQFallback = DeterministicFaq
 Conversation = ConversationRecord

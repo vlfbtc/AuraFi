@@ -59,9 +59,6 @@ class SQLiteRepository:
             self.database_path,
             timeout=timeout,
             isolation_level=None,
-            # The API uses ThreadingHTTPServer. Every connection access remains
-            # serialized by self._lock, so allowing the owning connection to be
-            # used by request threads is safe for this single-process adapter.
             check_same_thread=False,
         )
         self._connection.row_factory = sqlite3.Row
@@ -140,7 +137,7 @@ class SQLiteRepository:
     find_by_email = find_account_by_email
 
     def mark_email_verified(self, account_id: str, verified_at: Any = None) -> dict[str, Any] | None:
-        del verified_at  # The local contract only changes the boolean state.
+        del verified_at
         with self._transaction() as connection:
             connection.execute("UPDATE accounts SET email_verified = 1 WHERE account_id = ?", (account_id,))
         return self.get_account(account_id)
@@ -161,8 +158,6 @@ class SQLiteRepository:
             if otp is None:
                 raise ValueError("otp_digest ou otp e obrigatorio")
             digest = hashlib.sha256(str(otp).encode("utf-8")).hexdigest()
-        # The clear OTP is accepted only as an input convenience for the
-        # standalone adapter. It is removed before any SQL parameter is built.
         if "otp" in values:
             values = dict(values)
             values.pop("otp", None)
@@ -229,8 +224,6 @@ class SQLiteRepository:
         ended_at = values.get("ended_at", ended_at)
         access_token_digest = values.get("access_token_digest", access_token_digest)
         refresh_token_digest = values.get("refresh_token_digest", refresh_token_digest)
-        # Keep the repository boundary safe for callers that still have a raw
-        # token: only its digest can reach the sessions table.
         if access_token_digest is None and values.get("access_token") is not None:
             access_token_digest = self._digest_secret(values["access_token"])
         if refresh_token_digest is None and values.get("refresh_token") is not None:

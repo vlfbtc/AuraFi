@@ -602,7 +602,7 @@ def _number_for_json(value: Decimal) -> int | float:
     if value == value.to_integral_value():
         return int(value)
     number = float(value)
-    if not isfinite(number):  # defensive guard for very large Decimal values
+    if not isfinite(number):
         raise SimulationError(
             "O resultado da simulação não pode ser serializado como número finito.",
             details={"field": "numeric_result"},

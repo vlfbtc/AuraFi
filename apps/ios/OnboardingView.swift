@@ -238,7 +238,6 @@ struct OnboardingView: View {
                         .font(.footnote.italic())
                         .foregroundStyle(AuraTheme.pink)
                 }
-                // Breathing room so the selected 3pt border is never shaved by the ScrollView clip edge.
                 .padding(.horizontal, 3)
             }
 

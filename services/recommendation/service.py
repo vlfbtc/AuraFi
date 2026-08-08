@@ -541,7 +541,6 @@ class RecommendationService:
             eligibility=decisions,
         )
 
-    # Alias semântico para consumidores que tratam a operação como avaliação.
     assess = recommend
 
     def _no_match(

@@ -515,7 +515,7 @@ class InMemoryAccountRepository:
             return self._accounts.get(account_id)
 
     def mark_email_verified(self, account_id: str, verified_at: datetime) -> Account | None:
-        del verified_at  # O estado é suficiente no domínio; o repositório pode auditar o instante.
+        del verified_at
         with self._lock:
             current = self._accounts.get(account_id)
             if current is None:
@@ -733,9 +733,6 @@ class IdentityService:
         )
         self._challenges.save(challenge)
 
-        # A nonexistent account gets the same response shape and timing path,
-        # but no message is sent. The caller cannot use this result to enumerate
-        # accounts; the controlled sink is intentionally an explicit test port.
         if account is not None:
             try:
                 self._otp_delivery.deliver(
@@ -765,8 +762,6 @@ class IdentityService:
         correlation_id: str | None = None,
         channel: ChannelContext | ChannelName | str | None = None,
     ) -> AuthenticationResult:
-        # The in-memory adapter is protected here; a persistent adapter must
-        # additionally implement an atomic compare-and-consume operation.
         with self._verification_lock:
             return self._verify_otp(
                 challenge_id,
@@ -787,8 +782,6 @@ class IdentityService:
     ) -> AuthenticationResult:
         context = RequestContext.create(request_id, correlation_id, now=self._now())
         challenge = self._challenges.get(challenge_id)
-        # Always perform a digest comparison, including for unknown challenges,
-        # so the public failure does not disclose challenge/account existence.
         candidate_otp = otp if isinstance(otp, str) else ""
         digest = challenge.otp_digest if challenge is not None else self._otp_hasher.digest("000000")
         matches = bool(re.fullmatch(r"[0-9]{6}", candidate_otp)) and self._otp_hasher.matches(
@@ -814,7 +807,6 @@ class IdentityService:
             self._challenges.update(replace(challenge, status="cancelled"))
             raise AuthenticationError()
 
-        # Consume before issuing a grant: a retry cannot create a second session.
         consumed = replace(challenge, status="verified", verified_at=now)
         self._challenges.update(consumed)
         account = self._accounts.mark_email_verified(account.account_id, now) or account
@@ -885,10 +877,6 @@ class IdentityService:
         )
         self._sessions.update(refreshed)
         association = self._channel_identities.first_for_account(account.account_id)
-        # AuthResponse requires a channel context for compatibility with the
-        # existing envelope. Refreshing does not create or change an
-        # association; when an old account has none, the neutral simulated
-        # context is metadata only.
         channel = association.channel if association else ChannelContext.from_value("simulated")
         return AuthenticationResult(
             session=SessionGrant(

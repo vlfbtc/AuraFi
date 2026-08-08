@@ -311,7 +311,6 @@ class DeFiLlamaAdapter:
         self.ttl_seconds = ttl_seconds
         self.timeout_seconds = timeout_seconds
         self.cache_key = cache_key
-        # Import tardio evita ciclo: o enricher usa as portas definidas acima.
         from .enrichment import MarketDetailEnricher
 
         self.detail_enricher = MarketDetailEnricher(
@@ -326,8 +325,6 @@ class DeFiLlamaAdapter:
         self, opportunity: NormalizedOpportunity, *, mode: ReadMode = "auto"
     ) -> dict[str, Any]:
         """Adiciona histórico e apresentação monetária ao detalhe, fail-soft."""
-        # Testes e composição da API podem substituir a porta HTTP após criar o
-        # adapter; mantemos o enricher apontando para a mesma porta efetiva.
         self.detail_enricher.http_client = self.http_client
         self.detail_enricher.defillama_base_url = self.base_url
         return self.detail_enricher.enrich(
@@ -359,7 +356,7 @@ class DeFiLlamaAdapter:
         if mode in {"auto", "live"} and self._request_url() is not None:
             try:
                 return self._read_live()
-            except Exception as error:  # fallback controlado para indisponibilidade
+            except Exception as error:
                 live_error = error
 
         cached = self._read_cache()
@@ -413,7 +410,6 @@ class DeFiLlamaAdapter:
         try:
             self.cache.set(self.cache_key, CacheEntry(snapshot, expires_at))
         except Exception:
-            # Falha do cache não transforma uma leitura live válida em fallback.
             pass
         return snapshot
 

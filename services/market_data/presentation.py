@@ -18,7 +18,6 @@ def _br_number(value: float, decimals: int) -> str:
     """Formata um número no padrão brasileiro (milhar ``.`` e decimal ``,``)."""
     negative = value < 0
     formatted = f"{abs(value):,.{decimals}f}"
-    # Troca os separadores en-US pelos brasileiros usando um marcador temporário.
     formatted = formatted.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
     return f"-{formatted}" if negative else formatted
 
@@ -175,7 +174,6 @@ def decorate_opportunity(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-# Medidas de cenário denominadas no ativo (montante).
 _SCENARIO_ASSET_FIELDS = ("projected_value", "idle_stablecoin_value")
 
 

@@ -74,7 +74,6 @@ class DecorateOpportunityTests(unittest.TestCase):
         data_source = result["data_source"]
         self.assertEqual(data_source["source_label"], "DeFiLlama")
         self.assertEqual(data_source["status_label"], "Dados atualizados")
-        # A nota de frescor com sentinela [LACUNA] jamais deve chegar ao cliente.
         self.assertNotIn("freshness_note", data_source)
 
     def test_does_not_mutate_input_payload(self) -> None:
@@ -106,15 +105,11 @@ class AssetAmountAndSimulationTests(unittest.TestCase):
         result = decorate_simulation(payload)
         self.assertEqual(result["input"]["amount_display"], "500 STETH")
         scenario = result["scenarios"][0]
-        # projected_yield é PERCENTUAL acumulado, não montante.
         self.assertEqual(scenario["projected_yield_display"], "0,18%")
-        # projected_value e idle são montantes no ativo.
         self.assertEqual(scenario["projected_value_display"], "500,9 STETH")
         self.assertEqual(scenario["idle_stablecoin_value_display"], "500 STETH")
-        # O ganho em montante é derivado (projected_value - principal).
         self.assertEqual(scenario["projected_gain"], 0.9)
         self.assertEqual(scenario["projected_gain_display"], "0,9 STETH")
-        # Não deve mutar a entrada.
         self.assertNotIn("amount_display", payload["input"])
 
 

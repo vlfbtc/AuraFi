@@ -1,13 +1,11 @@
 import Foundation
 import LocalAuthentication
 
-/// Which biometric hardware the current device exposes for the app lock.
 enum BiometricKind: Equatable {
     case faceID
     case touchID
     case none
 
-    /// Human-facing label used in buttons and settings copy.
     var label: String {
         switch self {
         case .faceID: return "Face ID"
@@ -16,7 +14,6 @@ enum BiometricKind: Equatable {
         }
     }
 
-    /// SF Symbol that matches the hardware.
     var systemImage: String {
         switch self {
         case .faceID: return "faceid"
@@ -32,24 +29,15 @@ enum BiometricError: Error, Equatable {
     case failed
 }
 
-/// Abstraction over the biometric prompt so the lock flow can be driven by a
-/// fake in tests and previews without touching real `LAContext` hardware.
 protocol BiometricAuthenticating: Sendable {
     var availableBiometry: BiometricKind { get }
     func authenticate(reason: String) async -> Result<Void, BiometricError>
 }
 
-/// Production implementation backed by `LocalAuthentication`.
-///
-/// Uses `.deviceOwnerAuthentication` (biometrics *with* device-passcode
-/// fallback) so a failed or unenrolled biometric never locks the user out of
-/// their own account — the passcode always remains a valid escape hatch.
 struct SystemBiometricAuthenticator: BiometricAuthenticating {
     var availableBiometry: BiometricKind {
         let context = LAContext()
         var error: NSError?
-        // Passcode fallback requires a device passcode; if none is set the lock
-        // simply stays dormant instead of trapping the user.
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
             return .none
         }
@@ -86,9 +74,6 @@ struct SystemBiometricAuthenticator: BiometricAuthenticating {
     }
 }
 
-/// Persists the user's opt-out for the biometric lock. Enabled by default so a
-/// device that supports biometrics protects the session out of the box, while
-/// remaining fully toggleable from Settings.
 struct BiometricPreferenceStore {
     private let key = "aurafi.biometric-lock.enabled.v1"
     private let defaults: UserDefaults

@@ -276,7 +276,6 @@ class SimulatedChannelAdapter:
         )
         return response
 
-    # Nomes de conveniência usados por diferentes transportes de entrada.
     handle = receive
     handle_message = receive
     process_message = receive
