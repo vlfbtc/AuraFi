@@ -1101,33 +1101,85 @@ class ConversationService:
                 ),
             )
 
-    def _recommendation_pivot(self, profile_missing: bool, opportunities: Sequence[Any]) -> str:
+    _PROFILE_LABELS = {"conservative": "conservador", "moderate": "moderado", "aggressive": "arrojado"}
+    _PROFILE_APPETITE = {
+        "conservative": {"low"},
+        "moderate": {"low", "medium"},
+        "aggressive": {"low", "medium", "high"},
+    }
+
+    @staticmethod
+    def _risk_tier(attributes: Mapping[str, Any]) -> str:
+        from services.market_data.presentation import derive_risk_level
+
+        risk = attributes.get("risk")
+        level = risk.get("level") if isinstance(risk, Mapping) else None
+        if isinstance(level, str) and level and level != "unknown":
+            return level
+        apy = attributes.get("apy")
+        apy_value = apy.get("value") if isinstance(apy, Mapping) else None
+        tvl = attributes.get("tvl")
+        tvl_value = tvl.get("value") if isinstance(tvl, Mapping) else None
+        return derive_risk_level(apy_value, tvl_value, attributes.get("audit_status"))
+
+    @staticmethod
+    def _opportunity_head(attributes: Mapping[str, Any]) -> str:
+        return " · ".join(
+            part
+            for part in (str(attributes.get("protocol", "")).strip(), str(attributes.get("asset", "")).strip())
+            if part
+        )
+
+    def _recommendation_pivot(
+        self, profile_missing: bool, opportunities: Sequence[Any], profile: Any = None
+    ) -> str:
         from services.market_data.presentation import format_percent
 
-        options: list[str] = []
-        for opp in tuple(opportunities or ())[:3]:
-            attrs = getattr(opp, "attributes", None)
-            attrs = attrs if isinstance(attrs, Mapping) else {}
-            head = " · ".join(
-                part for part in (str(attrs.get("protocol", "")).strip(), str(attrs.get("asset", "")).strip()) if part
-            )
-            apy = attrs.get("apy")
-            if head and isinstance(apy, Mapping) and isinstance(apy.get("value"), (int, float)):
-                head += f" ({format_percent(float(apy['value']))})"
-            if head:
-                options.append(head)
-        listing = f" Agora observo, por exemplo: {'; '.join(options)}." if options else ""
-
+        opps = tuple(opportunities or ())
         if profile_missing:
+            options: list[str] = []
+            for opp in opps[:3]:
+                attrs = getattr(opp, "attributes", None)
+                attrs = attrs if isinstance(attrs, Mapping) else {}
+                head = self._opportunity_head(attrs)
+                apy = attrs.get("apy")
+                if head and isinstance(apy, Mapping) and isinstance(apy.get("value"), (int, float)):
+                    head += f" ({format_percent(float(apy['value']))})"
+                if head:
+                    options.append(head)
+            listing = f" Agora observo, por exemplo: {'; '.join(options)}." if options else ""
             return (
                 "Para eu apoiar melhor a sua decisão, conclua o questionário de perfil de risco na aba Início. "
                 "Enquanto isso, já posso explicar os riscos das oportunidades atuais, comparar as opções e simular "
                 "cenários educativos." + listing
             )
+
+        raw = str(getattr(profile, "declared_profile", "") or "")
+        label = self._PROFILE_LABELS.get(raw, raw or "declarado")
+        appetite = self._PROFILE_APPETITE.get(raw)
+        matched: list[str] = []
+        for opp in opps:
+            attrs = getattr(opp, "attributes", None)
+            attrs = attrs if isinstance(attrs, Mapping) else {}
+            tier = self._risk_tier(attrs)
+            if appetite is not None and tier not in appetite:
+                continue
+            head = self._opportunity_head(attrs)
+            if head:
+                matched.append(f"{head} (risco {tier})")
+            if len(matched) >= 3:
+                break
+
+        if matched:
+            return (
+                f"Perfil {label}. Entre as oportunidades observadas, estas tendem a se alinhar ao seu perfil: "
+                + "; ".join(matched)
+                + ". Isto é educativo, não é recomendação de investimento. Quer que eu explique os riscos de cada "
+                "uma ou compare as opções?"
+            )
         return (
-            "Eu apoio a sua decisão, mas não escolho uma alocação no seu lugar. O que posso fazer agora: explicar os "
-            "riscos de cada oportunidade, comparar as opções observadas e simular cenários educativos." + listing
-            + " Quer que eu compare as opções ou explique os riscos?"
+            f"Perfil {label}. No momento não observo oportunidades que se enquadrem com folga nesse perfil. Posso "
+            "explicar os riscos das opções atuais e comparar os trade-offs de forma educativa. Quer seguir assim?"
         )
 
     def _answer_recommendation(
@@ -1159,7 +1211,7 @@ class ConversationService:
         if profile is None or not profile.is_declared or policy is None:
             profile_missing = profile is None or not profile.is_declared
             return _AssistantResult(
-                text=_sanitize(self._recommendation_pivot(profile_missing, opportunities)),
+                text=_sanitize(self._recommendation_pivot(profile_missing, opportunities, profile)),
                 payload={
                     **payload,
                     "kind": "recommendation_pending",
@@ -1408,10 +1460,7 @@ class ConversationService:
             tvl = attributes.get("tvl")
             if isinstance(tvl, Mapping) and isinstance(tvl.get("value"), (int, float)):
                 parts.append(f"TVL {format_money_compact(float(tvl['value']), str(tvl.get('currency', 'USD')))}")
-            risk = attributes.get("risk")
-            level = risk.get("level") if isinstance(risk, Mapping) else None
-            if isinstance(level, str) and level and level != "unknown":
-                parts.append(f"risco {level}")
+            parts.append(f"risco {self._risk_tier(attributes)}")
             audit = attributes.get("audit_status")
             parts.append(
                 f"auditoria {audit}" if isinstance(audit, str) and audit and audit != "unknown"

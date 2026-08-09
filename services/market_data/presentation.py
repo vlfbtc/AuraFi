@@ -123,9 +123,56 @@ def _decorate_data_source(data_source: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def derive_risk_level(
+    apy_value: Any, tvl_value: Any, audit_status: Any
+) -> str:
+    """Classifica o risco a partir de sinais observáveis quando a fonte não o traz.
+
+    Heurística transparente: o risco cresce com o APY (busca por rendimento) e
+    diminui com a maturidade de liquidez (TVL) e com auditoria. Não é aconselhamento
+    personalizado, apenas uma leitura dos dados de mercado observados.
+    """
+    points = 0
+    if isinstance(apy_value, (int, float)):
+        if apy_value >= 25:
+            points += 3
+        elif apy_value >= 12:
+            points += 2
+        elif apy_value >= 6:
+            points += 1
+    if isinstance(tvl_value, (int, float)):
+        if tvl_value >= 1_000_000_000:
+            points -= 1
+        elif tvl_value < 10_000_000:
+            points += 2
+        elif tvl_value < 100_000_000:
+            points += 1
+    if audit_status == "audited":
+        points -= 1
+    elif audit_status == "not_verified":
+        points += 1
+    if points <= 0:
+        return "low"
+    if points <= 3:
+        return "medium"
+    return "high"
+
+
 def decorate_opportunity(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Enriquece uma oportunidade serializada com campos prontos para exibição."""
     result = dict(payload)
+
+    risk = result.get("risk")
+    if isinstance(risk, Mapping):
+        risk = dict(risk)
+        if not str(risk.get("level") or "").strip() or risk.get("level") == "unknown":
+            apy_value = result.get("apy")
+            apy_value = apy_value.get("value") if isinstance(apy_value, Mapping) else None
+            tvl_value = result.get("tvl")
+            tvl_value = tvl_value.get("value") if isinstance(tvl_value, Mapping) else None
+            risk["level"] = derive_risk_level(apy_value, tvl_value, result.get("audit_status"))
+            risk["classification"] = "heuristic"
+        result["risk"] = risk
 
     apy = result.get("apy")
     if isinstance(apy, Mapping):

@@ -11,6 +11,7 @@ import unittest
 from services.market_data.presentation import (
     decorate_opportunity,
     decorate_simulation,
+    derive_risk_level,
     format_asset_amount,
     format_money,
     format_money_compact,
@@ -81,6 +82,35 @@ class DecorateOpportunityTests(unittest.TestCase):
         decorate_opportunity(payload)
         self.assertNotIn("display", payload["apy"])
         self.assertIn("freshness_note", payload["data_source"])
+
+    def test_unknown_risk_is_classified_heuristically(self) -> None:
+        payload = self._payload()
+        payload["risk"] = {"score": None, "level": "unknown", "dimensions": []}
+        payload["audit_status"] = "audited"
+        result = decorate_opportunity(payload)
+        self.assertEqual(result["risk"]["level"], "low")
+        self.assertEqual(result["risk"]["classification"], "heuristic")
+
+    def test_source_provided_risk_level_is_preserved(self) -> None:
+        payload = self._payload()
+        payload["risk"] = {"score": 40.0, "level": "high", "dimensions": []}
+        result = decorate_opportunity(payload)
+        self.assertEqual(result["risk"]["level"], "high")
+        self.assertNotIn("classification", result["risk"])
+
+
+class DeriveRiskLevelTests(unittest.TestCase):
+    def test_low_for_mature_audited_low_yield(self) -> None:
+        self.assertEqual(derive_risk_level(2.2, 17_600_000_000, "audited"), "low")
+
+    def test_medium_for_moderate_yield_mid_tvl(self) -> None:
+        self.assertEqual(derive_risk_level(13.0, 50_000_000, None), "medium")
+
+    def test_high_for_aggressive_yield_thin_unaudited(self) -> None:
+        self.assertEqual(derive_risk_level(30.0, 5_000_000, "not_verified"), "high")
+
+    def test_missing_signals_default_to_low(self) -> None:
+        self.assertEqual(derive_risk_level(None, None, None), "low")
 
 
 class AssetAmountAndSimulationTests(unittest.TestCase):

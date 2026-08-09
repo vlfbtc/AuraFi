@@ -448,9 +448,9 @@ struct AuraChatView: View {
     private var quickActions: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                Button("Explique os riscos") { send("Quais riscos devo observar nas oportunidades atuais?") }
-                Button("Compare opções") { send("Compare as oportunidades disponíveis de forma educativa.") }
-                Button("Como funciona?") { send("Como a AuraFi usa os dados de mercado?") }
+                Button("Explique os riscos") { send("Explique os riscos") }
+                Button("Compare as opções") { send("Compare as opções") }
+                Button("Como funciona?") { send("Como funciona?") }
             }
             .buttonStyle(.bordered)
             .tint(AuraTheme.pinkBright)
@@ -834,9 +834,13 @@ struct OpportunityDetailView: View {
                         OpportunityExplainerCard(opportunity: currentOpportunity)
                         Text("Números observados").font(.title3.bold()).foregroundStyle(AuraTheme.purple)
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                            if let scoreLabel {
-                                MetricCard(title: "RISCO", value: scoreLabel, detail: currentOpportunity.riskLabel)
-                            }
+                            MetricCard(
+                                title: "RISCO",
+                                value: scoreLabel ?? currentOpportunity.riskLabel,
+                                detail: currentOpportunity.risk.isEstimated
+                                    ? "estimado por APY, TVL e auditoria"
+                                    : (scoreLabel != nil ? currentOpportunity.riskLabel : nil)
+                            )
                             if let primaryTVL {
                                 MetricCard(title: "TVL", value: primaryTVL, detail: "total depositado no protocolo")
                             }

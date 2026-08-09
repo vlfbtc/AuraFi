@@ -930,7 +930,7 @@ enum PreviewData {
             tvl: APIMarketValue(value: 1200000000, unit: nil, currency: "USD", observedAt: source.observedAt),
             liquidity: APILiquidity(level: "high", observedAt: source.observedAt),
             auditStatus: "audited",
-            risk: APIRisk(score: 9.2, level: "medium", dimensions: ["contrato", "liquidez"]),
+            risk: APIRisk(score: 9.2, level: "medium", dimensions: ["contrato", "liquidez"], classification: nil),
             dataSource: source,
             disclaimer: "Dados informativos de mercado; não constituem recomendação personalizada."
         )

@@ -753,6 +753,38 @@ class SimulationAndConversationTests(unittest.TestCase):
         self.assertIn("moderado", grounding)
         self.assertIn("Não faça recomendação personalizada", grounding)
 
+    def test_pivot_destaca_oportunidades_alinhadas_ao_perfil(self) -> None:
+        class _Opp:
+            def __init__(self, protocol, asset, apy, tvl, audit):
+                self.opportunity_id = f"{protocol}-{asset}"
+                self.attributes = {
+                    "protocol": protocol,
+                    "asset": asset,
+                    "apy": {"value": apy},
+                    "tvl": {"value": tvl},
+                    "audit_status": audit,
+                }
+
+        class _Profile:
+            is_declared = True
+            declared_profile = "conservative"
+
+        identity, _, _ = self._authenticated_conversation()
+        service = ConversationService(
+            identity=identity,
+            clock=lambda: NOW,
+            id_factory=DeterministicIdFactory("pivot"),
+        )
+        opportunities = [
+            _Opp("lido", "STETH", 2.2, 18_000_000_000, "audited"),
+            _Opp("degen", "XYZ", 30.0, 5_000_000, "not_verified"),
+        ]
+        text = service._recommendation_pivot(False, opportunities, _Profile())
+        self.assertIn("Perfil conservador", text)
+        self.assertIn("lido · STETH (risco low)", text)
+        self.assertNotIn("degen", text)
+        self.assertIn("educativo", text)
+
     def test_provider_output_requesting_secrets_is_replaced_by_safe_faq(self) -> None:
         class UnsafeProvider:
             def complete(self, request):

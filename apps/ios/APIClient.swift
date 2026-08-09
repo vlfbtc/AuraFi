@@ -338,6 +338,9 @@ struct APIRisk: Codable {
     let score: Double?
     let level: String
     let dimensions: [String]
+    let classification: String?
+
+    var isEstimated: Bool { classification == "heuristic" }
 }
 
 struct OpportunityHistoryPoint: Codable, Identifiable {

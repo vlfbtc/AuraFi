@@ -1388,6 +1388,10 @@ components:
             level:
               type: string
               enum: [low, medium, high, unknown]
+            classification:
+              type: string
+              description: Presente como "heuristic" quando o nível é estimado pelo BFF a partir de APY, TVL e auditoria, por a fonte não classificar risco.
+              enum: [heuristic]
             dimensions:
               type: array
               items:
