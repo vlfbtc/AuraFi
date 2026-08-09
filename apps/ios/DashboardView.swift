@@ -382,8 +382,8 @@ struct AuraChatView: View {
                     .accessibilityLabel("Aviso: \(fallback)")
             }
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
+                List {
+                    Group {
                         ChatBubble(
                             text: "Olá! Posso explicar riscos, comparar dados observados e ajudar com simulações educativas.",
                             isFromUser: false,
@@ -410,8 +410,13 @@ struct AuraChatView: View {
                         }
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }
-                    .padding(18)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 18, bottom: 6, trailing: 18))
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: appModel.conversationMessages.count) {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("chat-bottom", anchor: .bottom)
@@ -501,7 +506,8 @@ private struct ChatBubble: View {
         HStack {
             if isFromUser { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 5) {
-                Text(text).fixedSize(horizontal: false, vertical: true)
+                Text(isFromUser ? AttributedString(text) : Self.rendered(text))
+                    .fixedSize(horizontal: false, vertical: true)
                 if isFallback {
                     Label("Resposta segura de contingência", systemImage: "exclamationmark.triangle")
                         .font(.caption2).foregroundStyle(.orange)
@@ -551,6 +557,13 @@ private struct ChatBubble: View {
         case .received:
             EmptyView()
         }
+    }
+
+    static func rendered(_ raw: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return (try? AttributedString(markdown: raw, options: options)) ?? AttributedString(raw)
     }
 
     private var deliveryAccessibilityLabel: String {

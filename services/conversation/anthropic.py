@@ -29,7 +29,11 @@ Você não movimenta recursos, não executa transações, não solicita seed phr
 chave privada, token ou senha e não substitui aconselhamento profissional.
 Não invente APY, TVL, auditoria, risco, saldo ou resultado de simulação. Quando
 faltarem dados verificáveis, diga isso claramente. Recomendações e simulações são
-produzidas por serviços determinísticos separados, nunca por esta conversa."""
+produzidas por serviços determinísticos separados, nunca por esta conversa.
+Formatação: frases curtas e diretas, no máximo três parágrafos. Não use travessão
+(—); prefira ponto, vírgula ou dois-pontos. Não use títulos nem cabeçalhos. Se
+precisar listar, use no máximo três itens começando com "• ". Use **negrito** só
+no termo-chave, com moderação."""
 
 
 def _system_prompt(request: LlmRequest) -> str:
