@@ -9,6 +9,10 @@ WORKDIR /app
 RUN groupadd --system aurafi && useradd --system --gid aurafi --home-dir /app aurafi \
     && mkdir -p /data && chown aurafi:aurafi /data
 
+# Only the managed-PostgreSQL path needs a driver; the SQLite/in-memory path
+# stays zero-dependency (see database/postgres/repository.py's lazy import).
+RUN pip install --no-cache-dir "psycopg[binary]==3.2.13"
+
 COPY --chown=aurafi:aurafi contracts ./contracts
 COPY --chown=aurafi:aurafi database ./database
 COPY --chown=aurafi:aurafi services ./services

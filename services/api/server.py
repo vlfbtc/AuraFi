@@ -20,16 +20,16 @@ DEFAULT_ALLOWED_ORIGINS = frozenset(
     }
 )
 ALLOWED_METHODS = "GET, POST, PUT, PATCH, OPTIONS"
-ALLOWED_HEADERS = frozenset(
-    {
-        "authorization",
-        "content-type",
-        "idempotency-key",
-        "x-request-id",
-        "x-correlation-id",
-        "x-channel",
-    }
+PREFLIGHT_METHODS = frozenset({"GET", "POST", "PUT", "PATCH"})
+ALLOWED_HEADERS_DISPLAY = (
+    "Authorization",
+    "Content-Type",
+    "Idempotency-Key",
+    "X-Request-ID",
+    "X-Correlation-ID",
+    "X-Channel",
 )
+ALLOWED_HEADERS = frozenset(name.casefold() for name in ALLOWED_HEADERS_DISPLAY)
 
 
 def allowed_origins_from_env(raw: str | None = None) -> frozenset[str]:
@@ -126,7 +126,7 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
 
     def _valid_preflight(self) -> bool:
         requested_method = self.headers.get("Access-Control-Request-Method", "").upper()
-        if requested_method and requested_method not in {"GET", "POST", "PUT"}:
+        if requested_method and requested_method not in PREFLIGHT_METHODS:
             return False
         requested_headers = self.headers.get("Access-Control-Request-Headers", "")
         headers = {item.strip().casefold() for item in requested_headers.split(",") if item.strip()}
@@ -166,7 +166,7 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
         if origin is not None and origin.rstrip("/") in self._allowed_origins:
             self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID, X-Correlation-ID, X-Channel")
+        self.send_header("Access-Control-Allow-Headers", ", ".join(ALLOWED_HEADERS_DISPLAY))
         self.send_header("Access-Control-Allow-Methods", ALLOWED_METHODS)
         if isinstance(payload, dict):
             meta = payload.get("meta")

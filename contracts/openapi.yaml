@@ -894,10 +894,10 @@ components:
           description: Explicação em pt-BR para cache, fallback ou atraso. Sentinelas internas nunca são expostas.
         source_label:
           type: string
-          description: Rótulo de fonte pronto para exibição (ex.: "DeFiLlama"). Ausente quando não há fonte utilizável.
+          description: "Rótulo de fonte pronto para exibição (ex.: \"DeFiLlama\"). Ausente quando não há fonte utilizável."
         status_label:
           type: string
-          description: Rótulo de estado pronto para exibição (ex.: "Dados atualizados", "Atualização pendente").
+          description: "Rótulo de estado pronto para exibição (ex.: \"Dados atualizados\", \"Atualização pendente\")."
     LlmMetadata:
       type: object
       required: [mode, mockable, explainability]
@@ -1093,10 +1093,10 @@ components:
           enum: [BRL, USD]
         display:
           type: string
-          description: Valor completo pronto para exibição em pt-BR (ex.: "R$ 88.000.000.000,00").
+          description: "Valor completo pronto para exibição em pt-BR (ex.: \"R$ 88.000.000.000,00\")."
         display_compact:
           type: string
-          description: Valor abreviado pronto para exibição em pt-BR (ex.: "R$ 88,0 bi").
+          description: "Valor abreviado pronto para exibição em pt-BR (ex.: \"R$ 88,0 bi\")."
     FxQuote:
       type: object
       required: [status, source, retrieved_at, is_stale]
@@ -1337,7 +1337,7 @@ components:
               format: date-time
             display:
               type: string
-              description: APY pronto para exibição em pt-BR (ex.: "2,20% a.a."). Formatado pelo BFF.
+              description: "APY pronto para exibição em pt-BR (ex.: \"2,20% a.a.\"). Formatado pelo BFF."
         tvl:
           type: object
           required: [value, currency, observed_at]
@@ -1353,10 +1353,10 @@ components:
               format: date-time
             display:
               type: string
-              description: TVL completo pronto para exibição em pt-BR (ex.: "US$ 1.200.000.000,00").
+              description: "TVL completo pronto para exibição em pt-BR (ex.: \"US$ 1.200.000.000,00\")."
             display_compact:
               type: string
-              description: TVL abreviado pronto para exibição em pt-BR (ex.: "US$ 17,6 bi").
+              description: "TVL abreviado pronto para exibição em pt-BR (ex.: \"US$ 17,6 bi\")."
         liquidity:
           type: object
           required: [level, observed_at]
@@ -1460,7 +1460,7 @@ components:
         amount_display:
           type: string
           readOnly: true
-          description: Aporte pronto para exibição em pt-BR (ex.: "500 STETH"). Presente apenas na resposta; formatado pelo BFF.
+          description: "Aporte pronto para exibição em pt-BR (ex.: \"500 STETH\"). Presente apenas na resposta; formatado pelo BFF."
         asset:
           type: string
         horizons_days:
@@ -1498,21 +1498,21 @@ components:
                 description: Valor total projetado (principal + ganho), no ativo.
               projected_value_display:
                 type: string
-                description: Valor total projetado pronto para exibição em pt-BR (ex.: "500,90 STETH"). Formatado pelo BFF.
+                description: "Valor total projetado pronto para exibição em pt-BR (ex.: \"500,90 STETH\"). Formatado pelo BFF."
               projected_yield:
                 type: number
                 format: double
                 description: Percentual acumulado do cenário (não é montante).
               projected_yield_display:
                 type: string
-                description: Percentual acumulado pronto para exibição em pt-BR (ex.: "0,18%").
+                description: "Percentual acumulado pronto para exibição em pt-BR (ex.: \"0,18%\")."
               projected_gain:
                 type: number
                 format: double
                 description: Ganho em montante (projected_value - principal), derivado pelo BFF.
               projected_gain_display:
                 type: string
-                description: Ganho em montante pronto para exibição em pt-BR (ex.: "0,9 STETH").
+                description: "Ganho em montante pronto para exibição em pt-BR (ex.: \"0,9 STETH\")."
               idle_stablecoin_value:
                 type: number
                 format: double

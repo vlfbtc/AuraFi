@@ -1,21 +1,16 @@
-"""Small stdlib-only SQLite repository for the AuraFi MVP local/demo journey.
-
-The repository is intentionally an adapter, not a domain service. Its schema is
-compatible with the approved PostgreSQL model where the local MVP needs it, but
-it is not a PostgreSQL/RDS migration or a production database implementation.
+"""PostgreSQL adapter mirroring SQLiteRepository's contract method-for-method,
+against the schema in database/migrations/*.sql. psycopg is imported lazily
+so the SQLite/in-memory path stays dependency-free.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _SECRET_KEYS = {
@@ -35,62 +30,93 @@ _RISK_DIMENSIONS = {
     "counterparty",
     "data_quality",
 }
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 
-class SQLiteRepository:
-    """Transaction-safe local adapter with an explicit close lifecycle.
+def _to_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise TypeError("timestamp deve ser datetime ou ISO-8601")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
-    One connection is owned by the repository and guarded by a lock. This is
-    suitable for a local/demo process and intentionally does not attempt to be
-    a connection pool or a multi-process writer abstraction.
-    """
+
+def _to_optional_datetime(value: Any) -> datetime | None:
+    return None if value is None else _to_datetime(value)
+
+
+def _format_timestamp(value: Any) -> str:
+    return _to_datetime(value).strftime(_TIMESTAMP_FORMAT)
+
+
+def _format_optional_timestamp(value: Any) -> str | None:
+    return None if value is None else _format_timestamp(value)
+
+
+def _stringify_timestamps(row: dict[str, Any] | None, fields: Iterable[str]) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    for field in fields:
+        if row.get(field) is not None:
+            row[field] = _format_timestamp(row[field])
+    return row
+
+
+class PostgresRepository:
+    """One connection guarded by a lock, matching SQLiteRepository (single-replica MVP, no pooling)."""
 
     def __init__(
         self,
-        database_path: str | Path,
+        dsn: str,
         *,
-        now: Callable[[], datetime] | None = None,
-        timeout: float = 5.0,
+        now: Any = None,
+        connect_timeout: float = 10.0,
     ) -> None:
-        self.database_path = str(database_path)
+        import psycopg
+        from psycopg.rows import dict_row
+
+        self._psycopg = psycopg
+        self._dict_row = dict_row
+        self.dsn = dsn
         self._lock = threading.RLock()
         self._now = now or (lambda: datetime.now(timezone.utc))
-        self._connection: sqlite3.Connection | None = sqlite3.connect(
-            self.database_path,
-            timeout=timeout,
-            isolation_level=None,
-            check_same_thread=False,
-        )
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
+        self._connection = psycopg.connect(dsn, autocommit=False, connect_timeout=connect_timeout)
 
     @property
     def is_closed(self) -> bool:
-        return self._connection is None
+        return self._connection is None or self._connection.closed
 
-    def initialize(self, schema_path: str | Path | None = None) -> None:
-        """Apply the local schema; running it again is safe."""
+    def initialize(self, migrations_dir: str | Path | None = None) -> None:
+        """Applies migrations not yet in aurafi.schema_migrations; safe to call on every startup."""
 
-        path = Path(schema_path) if schema_path else Path(__file__).with_name("schema.sql")
+        directory = Path(migrations_dir) if migrations_dir else _MIGRATIONS_DIR
+        migration_files = sorted(directory.glob("*.sql"))
         with self._lock:
             connection = self._require_connection()
-            connection.executescript(path.read_text(encoding="utf-8"))
-            columns = {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(otp_challenges)").fetchall()
-            }
-            if "attempts" not in columns:
-                connection.execute(
-                    "ALTER TABLE otp_challenges ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)"
-                )
+            cursor = connection.cursor()
+            cursor.execute("SELECT to_regclass('aurafi.schema_migrations')")
+            (table_oid,) = cursor.fetchone()
+            applied: set[str] = set()
+            if table_oid is not None:
+                cursor.execute("SELECT version FROM aurafi.schema_migrations")
+                applied = {row[0] for row in cursor.fetchall()}
+            for path in migration_files:
+                version = path.stem
+                if version in applied:
+                    continue
+                cursor.execute(path.read_text(encoding="utf-8"))
+            connection.commit()
 
     def close(self) -> None:
         with self._lock:
-            if self._connection is not None:
+            if self._connection is not None and not self._connection.closed:
                 self._connection.close()
-                self._connection = None
 
-    def __enter__(self) -> "SQLiteRepository":
+    def __enter__(self) -> "PostgresRepository":
         self._require_connection()
         return self
 
@@ -113,33 +139,35 @@ class SQLiteRepository:
             created_at = values.get("created_at", created_at)
         if email is None:
             raise ValueError("email e obrigatorio")
-        timestamp = self._timestamp(created_at)
+        timestamp = _to_datetime(created_at) if created_at is not None else self._now()
         with self._transaction() as connection:
             connection.execute(
-                "INSERT INTO accounts (account_id, email, email_verified, created_at) VALUES (?, ?, ?, ?)",
-                (self._text(account_id, "account_id"), self._normalize_email(email), int(email_verified), timestamp),
+                "INSERT INTO aurafi.accounts (account_id, email, email_verified, created_at) VALUES (%s, %s, %s, %s)",
+                (self._text(account_id, "account_id"), self._normalize_email(email), bool(email_verified), timestamp),
             )
         return self.get_account(account_id)  # type: ignore[return-value]
 
     create_account = save_account
 
     def get_account(self, account_id: str) -> dict[str, Any] | None:
-        row = self._fetchone("SELECT * FROM accounts WHERE account_id = ?", (account_id,))
-        return self._row(row)
+        row = self._fetchone("SELECT * FROM aurafi.accounts WHERE account_id = %s", (account_id,))
+        return _stringify_timestamps(row, ("created_at",))
 
     def find_account_by_email(self, email: str) -> dict[str, Any] | None:
         row = self._fetchone(
-            "SELECT * FROM accounts WHERE email = ? ORDER BY created_at, account_id LIMIT 1",
+            "SELECT * FROM aurafi.accounts WHERE email = %s ORDER BY created_at, account_id LIMIT 1",
             (self._normalize_email(email),),
         )
-        return self._row(row)
+        return _stringify_timestamps(row, ("created_at",))
 
     find_by_email = find_account_by_email
 
     def mark_email_verified(self, account_id: str, verified_at: Any = None) -> dict[str, Any] | None:
         del verified_at
         with self._transaction() as connection:
-            connection.execute("UPDATE accounts SET email_verified = 1 WHERE account_id = ?", (account_id,))
+            connection.execute(
+                "UPDATE aurafi.accounts SET email_verified = true WHERE account_id = %s", (account_id,)
+            )
         return self.get_account(account_id)
 
     def save_otp_challenge(
@@ -149,6 +177,8 @@ class SQLiteRepository:
         otp: str | None = None,
         otp_digest: str | None = None,
     ) -> dict[str, Any]:
+        import hashlib
+
         values = self._mapping(challenge)
         if not values:
             raise TypeError("challenge deve ser um mapping ou objeto com atributos")
@@ -158,16 +188,13 @@ class SQLiteRepository:
             if otp is None:
                 raise ValueError("otp_digest ou otp e obrigatorio")
             digest = hashlib.sha256(str(otp).encode("utf-8")).hexdigest()
-        if "otp" in values:
-            values = dict(values)
-            values.pop("otp", None)
-        created_at = self._timestamp(values.get("created_at"))
-        expires_at = self._timestamp(values.get("expires_at"))
+        created_at = _to_datetime(values.get("created_at")) if values.get("created_at") else self._now()
+        expires_at = _to_datetime(values["expires_at"])
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO otp_challenges
+                """INSERT INTO aurafi.otp_challenges
                 (challenge_id, email, channel, delivery, otp_digest, attempts, status, expires_at, created_at, verified_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     self._text(values.get("challenge_id"), "challenge_id"),
                     self._normalize_email(values.get("email")),
@@ -178,7 +205,7 @@ class SQLiteRepository:
                     values.get("status", "pending"),
                     expires_at,
                     created_at,
-                    self._optional_timestamp(values.get("verified_at")),
+                    _to_optional_datetime(values.get("verified_at")),
                 ),
             )
         return self.get_otp_challenge(values["challenge_id"])  # type: ignore[return-value]
@@ -186,7 +213,10 @@ class SQLiteRepository:
     create_otp_challenge = save_otp_challenge
 
     def get_otp_challenge(self, challenge_id: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM otp_challenges WHERE challenge_id = ?", (challenge_id,)))
+        row = self._fetchone(
+            "SELECT * FROM aurafi.otp_challenges WHERE challenge_id = %s", (challenge_id,)
+        )
+        return _stringify_timestamps(row, ("expires_at", "created_at", "verified_at"))
 
     def update_otp_challenge(
         self,
@@ -198,8 +228,8 @@ class SQLiteRepository:
     ) -> dict[str, Any] | None:
         with self._transaction() as connection:
             connection.execute(
-                "UPDATE otp_challenges SET status = ?, verified_at = ?, attempts = ? WHERE challenge_id = ?",
-                (status, self._optional_timestamp(verified_at), int(attempts), challenge_id),
+                "UPDATE aurafi.otp_challenges SET status = %s, verified_at = %s, attempts = %s WHERE challenge_id = %s",
+                (status, _to_optional_datetime(verified_at), int(attempts), challenge_id),
             )
         return self.get_otp_challenge(challenge_id)
 
@@ -215,6 +245,8 @@ class SQLiteRepository:
         access_token_digest: str | None = None,
         refresh_token_digest: str | None = None,
     ) -> dict[str, Any]:
+        import hashlib
+
         values = self._mapping(session)
         session_id = values.get("session_id", session) if values else session
         account_id = values.get("account_id", account_id)
@@ -225,88 +257,124 @@ class SQLiteRepository:
         access_token_digest = values.get("access_token_digest", access_token_digest)
         refresh_token_digest = values.get("refresh_token_digest", refresh_token_digest)
         if access_token_digest is None and values.get("access_token") is not None:
-            access_token_digest = self._digest_secret(values["access_token"])
+            access_token_digest = hashlib.sha256(str(values["access_token"]).encode("utf-8")).hexdigest()
         if refresh_token_digest is None and values.get("refresh_token") is not None:
-            refresh_token_digest = self._digest_secret(values["refresh_token"])
+            refresh_token_digest = hashlib.sha256(str(values["refresh_token"]).encode("utf-8")).hexdigest()
         if account_id is None or expires_at is None:
             raise ValueError("account_id e expires_at sao obrigatorios")
+        started = _to_datetime(started_at) if started_at is not None else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO sessions
-                (session_id, account_id, started_at, expires_at, status, ended_at,
-                 access_token_digest, refresh_token_digest)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO aurafi.sessions
+                (session_id, account_id, started_at, expires_at, status, ended_at)
+                VALUES (%s, %s, %s, %s, %s, %s)""",
                 (
                     self._text(session_id, "session_id"),
                     self._text(account_id, "account_id"),
-                    self._timestamp(started_at),
-                    self._timestamp(expires_at),
+                    started,
+                    _to_datetime(expires_at),
                     status,
-                    self._optional_timestamp(ended_at),
-                    access_token_digest,
-                    refresh_token_digest,
+                    _to_optional_datetime(ended_at),
                 ),
             )
+            self._save_session_digests(connection, session_id, access_token_digest, refresh_token_digest)
         return self.get_session(session_id)  # type: ignore[return-value]
 
     create_session = save_session
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM sessions WHERE session_id = ?", (session_id,)))
+        row = self._fetchone("SELECT * FROM aurafi.sessions WHERE session_id = %s", (session_id,))
+        return _stringify_timestamps(row, ("started_at", "expires_at", "ended_at"))
 
     def get_by_access_token_digest(self, digest: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM sessions WHERE access_token_digest = ?", (digest,)))
+        row = self._fetchone(
+            "SELECT * FROM aurafi.sessions WHERE access_token_digest = %s", (digest,)
+        )
+        return _stringify_timestamps(row, ("started_at", "expires_at", "ended_at"))
 
     def get_by_refresh_token_digest(self, digest: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM sessions WHERE refresh_token_digest = ?", (digest,)))
+        row = self._fetchone(
+            "SELECT * FROM aurafi.sessions WHERE refresh_token_digest = %s", (digest,)
+        )
+        return _stringify_timestamps(row, ("started_at", "expires_at", "ended_at"))
 
     def update_session(self, session: Mapping[str, Any] | Any) -> dict[str, Any]:
+        import hashlib
+
         values = self._mapping(session)
         if not values or not values.get("session_id"):
             raise ValueError("session_id e obrigatorio")
         if "access_token_digest" not in values and values.get("access_token") is not None:
-            values["access_token_digest"] = self._digest_secret(values["access_token"])
+            values["access_token_digest"] = hashlib.sha256(str(values["access_token"]).encode("utf-8")).hexdigest()
         if "refresh_token_digest" not in values and values.get("refresh_token") is not None:
-            values["refresh_token_digest"] = self._digest_secret(values["refresh_token"])
-        assignments = {
-            key: values[key]
-            for key in ("expires_at", "status", "ended_at", "access_token_digest", "refresh_token_digest")
-            if key in values
-        }
-        if "expires_at" in assignments:
-            assignments["expires_at"] = self._timestamp(assignments["expires_at"])
-        if "ended_at" in assignments:
-            assignments["ended_at"] = self._optional_timestamp(assignments["ended_at"])
+            values["refresh_token_digest"] = hashlib.sha256(str(values["refresh_token"]).encode("utf-8")).hexdigest()
+        assignments: dict[str, Any] = {}
+        if "expires_at" in values:
+            assignments["expires_at"] = _to_datetime(values["expires_at"])
+        if "status" in values:
+            assignments["status"] = values["status"]
+        if "ended_at" in values:
+            assignments["ended_at"] = _to_optional_datetime(values["ended_at"])
+        if "access_token_digest" in values:
+            assignments["access_token_digest"] = values["access_token_digest"]
+        if "refresh_token_digest" in values:
+            assignments["refresh_token_digest"] = values["refresh_token_digest"]
         if not assignments:
             return self.get_session(values["session_id"])  # type: ignore[return-value]
-        clause = ", ".join(f"{key} = ?" for key in assignments)
         with self._transaction() as connection:
-            connection.execute(
-                f"UPDATE sessions SET {clause} WHERE session_id = ?",
-                (*assignments.values(), values["session_id"]),
-            )
+            digests = {
+                key: assignments.pop(key)
+                for key in ("access_token_digest", "refresh_token_digest")
+                if key in assignments
+            }
+            if assignments:
+                clause = ", ".join(f"{key} = %s" for key in assignments)
+                connection.execute(
+                    f"UPDATE aurafi.sessions SET {clause} WHERE session_id = %s",
+                    (*assignments.values(), values["session_id"]),
+                )
+            if digests:
+                self._save_session_digests(
+                    connection,
+                    values["session_id"],
+                    digests.get("access_token_digest"),
+                    digests.get("refresh_token_digest"),
+                )
         return self.get_session(values["session_id"])  # type: ignore[return-value]
 
-    def save_channel_identity(
-        self, association: Mapping[str, Any] | Any
-    ) -> dict[str, Any]:
+    def _save_session_digests(
+        self, connection: Any, session_id: str, access_token_digest: Any, refresh_token_digest: Any
+    ) -> None:
+        if access_token_digest is None and refresh_token_digest is None:
+            return
+        assignments = {}
+        if access_token_digest is not None:
+            assignments["access_token_digest"] = access_token_digest
+        if refresh_token_digest is not None:
+            assignments["refresh_token_digest"] = refresh_token_digest
+        clause = ", ".join(f"{key} = %s" for key in assignments)
+        connection.execute(
+            f"UPDATE aurafi.sessions SET {clause} WHERE session_id = %s",
+            (*assignments.values(), session_id),
+        )
+
+    def save_channel_identity(self, association: Mapping[str, Any] | Any) -> dict[str, Any]:
         values = self._mapping(association)
         channel = self._mapping(values.get("channel", {}))
         channel_name = values.get("channel_name", channel.get("name"))
         adapter = values.get("adapter", channel.get("adapter"))
-        simulated = values.get("simulated", channel.get("simulated", False))
+        created_at = _to_datetime(values["created_at"]) if values.get("created_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO channel_identities
-                (channel_identity_id, account_id, channel_name, adapter, simulated, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO aurafi.channel_identities
+                (channel_identity_id, account_id, channel_name, adapter, created_at)
+                VALUES (%s, %s, %s, %s, %s)""",
                 (
                     self._text(values.get("channel_identity_id"), "channel_identity_id"),
                     self._text(values.get("account_id"), "account_id"),
                     channel_name,
                     self._text(adapter, "adapter"),
-                    int(bool(simulated)),
-                    self._timestamp(values.get("created_at")),
+                    created_at,
                 ),
             )
         return self.get_channel_identity(values["channel_identity_id"])  # type: ignore[return-value]
@@ -315,37 +383,39 @@ class SQLiteRepository:
 
     def get_channel_identity(self, channel_identity_id: str) -> dict[str, Any] | None:
         return self._decode_channel_identity(
-            self._row(
-                self._fetchone(
-                    "SELECT * FROM channel_identities WHERE channel_identity_id = ?",
-                    (channel_identity_id,),
-                )
+            self._fetchone(
+                "SELECT * FROM aurafi.channel_identities WHERE channel_identity_id = %s",
+                (channel_identity_id,),
             )
         )
 
-    def find_channel_identity(
-        self, account_id: str, channel_name: str, adapter: str
-    ) -> dict[str, Any] | None:
+    def find_channel_identity(self, account_id: str, channel_name: str, adapter: str) -> dict[str, Any] | None:
         return self._decode_channel_identity(
-            self._row(
-                self._fetchone(
-                    """SELECT * FROM channel_identities
-                    WHERE account_id = ? AND channel_name = ? AND adapter = ?""",
-                    (account_id, channel_name, adapter),
-                )
+            self._fetchone(
+                """SELECT * FROM aurafi.channel_identities
+                WHERE account_id = %s AND channel_name = %s AND adapter = %s""",
+                (account_id, channel_name, adapter),
             )
         )
 
     def first_channel_identity(self, account_id: str) -> dict[str, Any] | None:
         return self._decode_channel_identity(
-            self._row(
-                self._fetchone(
-                    """SELECT * FROM channel_identities
-                    WHERE account_id = ? ORDER BY created_at, channel_identity_id LIMIT 1""",
-                    (account_id,),
-                )
+            self._fetchone(
+                """SELECT * FROM aurafi.channel_identities
+                WHERE account_id = %s ORDER BY created_at, channel_identity_id LIMIT 1""",
+                (account_id,),
             )
         )
+
+    @staticmethod
+    def _decode_channel_identity(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        row = _stringify_timestamps(row, ("created_at",))
+        if row is None:
+            return None
+        simulated = row["channel_name"] == "simulated"
+        row["simulated"] = simulated
+        row["channel"] = {"name": row["channel_name"], "adapter": row["adapter"], "simulated": simulated}
+        return row
 
     def save_consent(self, consent: Mapping[str, Any] | Any, **overrides: Any) -> dict[str, Any]:
         values = self._mapping(consent)
@@ -354,18 +424,19 @@ class SQLiteRepository:
         for key in required:
             if values.get(key) is None:
                 raise ValueError(f"{key} e obrigatorio")
+        captured_at = _to_datetime(values["captured_at"]) if values.get("captured_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO consents
+                """INSERT INTO aurafi.consents
                 (consent_id, account_id, purpose, status, policy_version, captured_at, memory, analytics)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     values["consent_id"],
                     values["account_id"],
                     values["purpose"],
                     values["status"],
                     values["policy_version"],
-                    self._timestamp(values.get("captured_at")),
+                    captured_at,
                     self._bool_or_none(values.get("memory")),
                     self._bool_or_none(values.get("analytics")),
                 ),
@@ -375,7 +446,8 @@ class SQLiteRepository:
     create_consent = save_consent
 
     def get_consent(self, consent_id: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM consents WHERE consent_id = ?", (consent_id,)))
+        row = self._fetchone("SELECT * FROM aurafi.consents WHERE consent_id = %s", (consent_id,))
+        return _stringify_timestamps(row, ("captured_at",))
 
     def save_risk_profile(
         self,
@@ -392,47 +464,47 @@ class SQLiteRepository:
             raise ValueError("perfil declarado exige exatamente cinco respostas")
         if status == "missing" and answer_values:
             raise ValueError("perfil ausente nao aceita respostas")
+        declared_at = _to_datetime(values["declared_at"]) if values.get("declared_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO risk_profiles
+                """INSERT INTO aurafi.risk_profiles
                 (risk_profile_id, account_id, declared_profile, status, version, declared_at, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     values.get("risk_profile_id"),
                     values.get("account_id"),
                     values.get("declared_profile"),
                     status,
                     values.get("version"),
-                    self._timestamp(values.get("declared_at")),
+                    declared_at,
                     values.get("source", "questionnaire" if status == "declared" else None),
                 ),
             )
             for answer in answer_values:
-                answer_values_map = self._mapping(answer)
+                answer_map = self._mapping(answer)
                 connection.execute(
-                    "INSERT INTO risk_profile_answers (risk_profile_id, question_id, answer) VALUES (?, ?, ?)",
-                    (values["risk_profile_id"], answer_values_map.get("question_id"), answer_values_map.get("answer")),
+                    "INSERT INTO aurafi.risk_profile_answers (risk_profile_id, question_id, answer) VALUES (%s, %s, %s)",
+                    (values["risk_profile_id"], answer_map.get("question_id"), answer_map.get("answer")),
                 )
         return self.get_risk_profile(values["risk_profile_id"])  # type: ignore[return-value]
 
     create_risk_profile = save_risk_profile
 
     def get_risk_profile(self, risk_profile_id: str) -> dict[str, Any] | None:
-        row = self._fetchone("SELECT * FROM risk_profiles WHERE risk_profile_id = ?", (risk_profile_id,))
-        result = self._row(row)
+        row = self._fetchone(
+            "SELECT * FROM aurafi.risk_profiles WHERE risk_profile_id = %s", (risk_profile_id,)
+        )
+        result = _stringify_timestamps(row, ("declared_at",))
         if result is not None:
-            result["answers"] = [
-                self._row(answer)
-                for answer in self._fetchall(
-                    "SELECT question_id, answer FROM risk_profile_answers WHERE risk_profile_id = ? ORDER BY question_id",
-                    (risk_profile_id,),
-                )
-            ]
+            result["answers"] = self._fetchall(
+                "SELECT question_id, answer FROM aurafi.risk_profile_answers WHERE risk_profile_id = %s ORDER BY question_id",
+                (risk_profile_id,),
+            )
         return result
 
     def get_latest_risk_profile(self, account_id: str) -> dict[str, Any] | None:
         row = self._fetchone(
-            "SELECT * FROM risk_profiles WHERE account_id = ? ORDER BY declared_at DESC, version DESC LIMIT 1",
+            "SELECT risk_profile_id FROM aurafi.risk_profiles WHERE account_id = %s ORDER BY declared_at DESC, version DESC LIMIT 1",
             (account_id,),
         )
         return self.get_risk_profile(row["risk_profile_id"]) if row else None
@@ -447,17 +519,17 @@ class SQLiteRepository:
         opportunity_id = self._text(snapshot.get("opportunity_id"), "opportunity_id")
         observation_id = snapshot.get("market_observation_id") or snapshot.get("observation_id")
         observation_id = observation_id or observation.get("observation_id") or f"observation:{opportunity_id}"
-        observed_at = self._timestamp(observation.get("observed_at", snapshot.get("observed_at")))
-        retrieved_at = self._timestamp(observation.get("retrieved_at", snapshot.get("retrieved_at")))
+        observed_at = _to_datetime(observation.get("observed_at", snapshot.get("observed_at")))
+        retrieved_at = _to_datetime(observation.get("retrieved_at", snapshot.get("retrieved_at")))
         apy_value = apy.get("value", snapshot.get("apy_value"))
         tvl_value = tvl.get("value", snapshot.get("tvl_value"))
         liquidity_level = liquidity.get("level", snapshot.get("liquidity_level", "unknown"))
-        liquidity_observed_at = self._timestamp(liquidity.get("observed_at", observed_at))
-        apy_observed_at = self._timestamp(apy.get("observed_at", observed_at))
-        tvl_observed_at = self._timestamp(tvl.get("observed_at", observed_at))
+        liquidity_observed_at = _to_datetime(liquidity.get("observed_at", observed_at))
+        apy_observed_at = _to_datetime(apy.get("observed_at", observed_at))
+        tvl_observed_at = _to_datetime(tvl.get("observed_at", observed_at))
         risk_score = risk.get("score", snapshot.get("risk_score"))
         risk_level = risk.get("level", snapshot.get("risk_level"))
-        dimensions = risk.get("dimensions", snapshot.get("risk_dimensions", []))
+        dimensions = list(risk.get("dimensions", snapshot.get("risk_dimensions", [])))
         self._validate_risk_dimensions(dimensions)
         stale = bool(observation.get("is_stale", snapshot.get("is_stale", False)))
         freshness_note = observation.get("freshness_note", snapshot.get("freshness_note"))
@@ -466,21 +538,21 @@ class SQLiteRepository:
         disclaimer = self._text(snapshot.get("disclaimer"), "disclaimer")
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO defi_market_observations
+                """INSERT INTO aurafi.defi_market_observations
                 (market_observation_id, source, mode, observed_at, retrieved_at, cache_expires_at,
                  read_only, is_stale, freshness_note, protocol, pool, asset, blockchain,
                  apy_value, apy_unit, apy_observed_at, tvl_value, tvl_currency, tvl_observed_at,
                  liquidity_level, liquidity_value, liquidity_currency, liquidity_observed_at,
                  risk_score, risk_level, risk_dimensions, audit_status)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, true, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     observation_id,
                     observation.get("source", "defillama"),
                     observation.get("mode", snapshot.get("mode", "test")),
                     observed_at,
                     retrieved_at,
-                    self._optional_timestamp(observation.get("cache_expires_at")),
-                    int(stale),
+                    _to_optional_datetime(observation.get("cache_expires_at")),
+                    stale,
                     freshness_note,
                     snapshot.get("protocol"),
                     snapshot.get("pool"),
@@ -498,18 +570,18 @@ class SQLiteRepository:
                     liquidity_observed_at,
                     risk.get("score", snapshot.get("observation_risk_score", risk_score)),
                     risk_level,
-                    self._json(dimensions),
+                    dimensions,
                     snapshot.get("audit_status"),
                 ),
             )
             connection.execute(
-                """INSERT INTO opportunities
+                """INSERT INTO aurafi.opportunities
                 (opportunity_id, market_observation_id, protocol, pool, asset, blockchain,
                  apy_value, apy_unit, apy_observed_at, tvl_value, tvl_currency, tvl_observed_at,
                  liquidity_level, liquidity_value, liquidity_currency, liquidity_observed_at,
                  risk_score, risk_level, risk_dimensions, audit_status, eligibility_status,
                  eligibility_reason, disclaimer, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     opportunity_id,
                     observation_id,
@@ -529,12 +601,12 @@ class SQLiteRepository:
                     liquidity_observed_at,
                     risk_score,
                     risk_level,
-                    self._json(dimensions),
+                    dimensions,
                     snapshot.get("audit_status"),
                     eligibility.get("status", snapshot.get("eligibility_status")),
                     eligibility.get("reason", snapshot.get("eligibility_reason")),
                     disclaimer,
-                    self._timestamp(snapshot.get("created_at")),
+                    self._now(),
                 ),
             )
         return self.get_opportunity_snapshot(opportunity_id)  # type: ignore[return-value]
@@ -542,22 +614,25 @@ class SQLiteRepository:
     create_opportunity_snapshot = save_opportunity_snapshot
 
     def get_opportunity(self, opportunity_id: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM opportunities WHERE opportunity_id = ?", (opportunity_id,)))
+        row = self._fetchone(
+            "SELECT * FROM aurafi.opportunities WHERE opportunity_id = %s", (opportunity_id,)
+        )
+        return _stringify_timestamps(row, ("apy_observed_at", "tvl_observed_at", "liquidity_observed_at", "created_at"))
 
     def get_opportunity_snapshot(self, opportunity_id: str) -> dict[str, Any] | None:
         opportunity = self.get_opportunity(opportunity_id)
         if opportunity is None:
             return None
-        observation = self._row(
+        observation = _stringify_timestamps(
             self._fetchone(
-                "SELECT * FROM defi_market_observations WHERE market_observation_id = ?",
+                "SELECT * FROM aurafi.defi_market_observations WHERE market_observation_id = %s",
                 (opportunity["market_observation_id"],),
-            )
+            ),
+            ("observed_at", "retrieved_at", "cache_expires_at", "apy_observed_at", "tvl_observed_at", "liquidity_observed_at"),
         )
         if observation is None:
             return opportunity
         result = dict(opportunity)
-        result["risk_dimensions"] = json.loads(result["risk_dimensions"])
         result["data_source"] = {
             "observation_id": observation["market_observation_id"],
             "source": observation["source"],
@@ -580,9 +655,14 @@ class SQLiteRepository:
         return result
 
     def list_opportunities(self) -> list[dict[str, Any]]:
-        return [self.get_opportunity_snapshot(row["opportunity_id"]) for row in self._fetchall("SELECT opportunity_id FROM opportunities ORDER BY created_at, opportunity_id")]
+        rows = self._fetchall("SELECT opportunity_id FROM aurafi.opportunities ORDER BY created_at, opportunity_id")
+        return [self.get_opportunity_snapshot(row["opportunity_id"]) for row in rows]
 
-    def save_simulation(self, simulation: Mapping[str, Any], scenarios: Iterable[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    def save_simulation(
+        self, simulation: Mapping[str, Any], scenarios: Iterable[Mapping[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+
         input_data = self._mapping(simulation.get("input", {}))
         scenario_values = list(scenarios if scenarios is not None else simulation.get("scenarios", ()))
         horizons = input_data.get("horizons_days", simulation.get("horizons_days"))
@@ -590,33 +670,34 @@ class SQLiteRepository:
             raise ValueError("horizons_days deve conter 1 a 3 valores unicos entre 30, 180 e 365")
         if bool(simulation.get("execution_supported", False)):
             raise ValueError("simulacao local nunca suporta execucao")
+        generated_at = _to_datetime(simulation["generated_at"]) if simulation.get("generated_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO simulations
+                """INSERT INTO aurafi.simulations
                 (simulation_id, account_id, opportunity_id, input_amount, input_asset, horizons_days,
                  compare_idle_stablecoin, assumptions, data_source_observation_id, generated_at,
                  execution_supported, disclaimer)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, false, %s)""",
                 (
                     simulation.get("simulation_id"),
                     simulation.get("account_id"),
                     simulation.get("opportunity_id"),
                     input_data.get("amount", input_data.get("input_amount", simulation.get("amount", simulation.get("input_amount")))),
                     input_data.get("asset", input_data.get("input_asset", simulation.get("asset", simulation.get("input_asset")))),
-                    self._json(list(horizons)),
-                    int(input_data.get("compare_idle_stablecoin", simulation.get("compare_idle_stablecoin", True))),
-                    self._json(simulation.get("assumptions", [])),
+                    list(horizons),
+                    bool(input_data.get("compare_idle_stablecoin", simulation.get("compare_idle_stablecoin", True))),
+                    Jsonb(list(simulation.get("assumptions", []))),
                     simulation.get("data_source_observation_id"),
-                    self._timestamp(simulation.get("generated_at")),
+                    generated_at,
                     self._text(simulation.get("disclaimer"), "disclaimer"),
                 ),
             )
             for scenario in scenario_values:
                 scenario_map = self._mapping(scenario)
                 connection.execute(
-                    """INSERT INTO simulation_scenarios
+                    """INSERT INTO aurafi.simulation_scenarios
                     (simulation_id, horizon_days, projected_value, projected_yield, idle_stablecoin_value, currency)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    VALUES (%s, %s, %s, %s, %s, %s)""",
                     (
                         simulation["simulation_id"],
                         scenario_map.get("horizon_days"),
@@ -631,20 +712,15 @@ class SQLiteRepository:
     create_simulation = save_simulation
 
     def get_simulation(self, simulation_id: str) -> dict[str, Any] | None:
-        result = self._row(self._fetchone("SELECT * FROM simulations WHERE simulation_id = ?", (simulation_id,)))
+        result = self._fetchone("SELECT * FROM aurafi.simulations WHERE simulation_id = %s", (simulation_id,))
         if result is None:
             return None
-        result["horizons_days"] = json.loads(result["horizons_days"])
-        result["assumptions"] = json.loads(result["assumptions"])
-        result["execution_supported"] = bool(result["execution_supported"])
-        result["compare_idle_stablecoin"] = bool(result["compare_idle_stablecoin"])
-        result["scenarios"] = [
-            self._row(row)
-            for row in self._fetchall(
-                "SELECT * FROM simulation_scenarios WHERE simulation_id = ? ORDER BY horizon_days",
-                (simulation_id,),
-            )
-        ]
+        result = _stringify_timestamps(result, ("generated_at",))
+        result["horizons_days"] = list(result["horizons_days"])
+        result["scenarios"] = self._fetchall(
+            "SELECT * FROM aurafi.simulation_scenarios WHERE simulation_id = %s ORDER BY horizon_days",
+            (simulation_id,),
+        )
         result["input"] = {
             "amount": result.pop("input_amount"),
             "asset": result.pop("input_asset"),
@@ -661,17 +737,18 @@ class SQLiteRepository:
             "adapter": conversation.get("adapter", channel.get("adapter")),
             "simulated": conversation.get("simulated", channel.get("simulated", False)),
         }
+        last_activity_at = _to_datetime(values["last_activity_at"]) if values.get("last_activity_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO conversations
+                """INSERT INTO aurafi.conversations
                 (conversation_id, account_id, session_id, consent_id, correlation_id, channel_name,
                  adapter, simulated, status, last_activity_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     values.get("conversation_id"), values.get("account_id"), values.get("session_id"),
                     values.get("consent_id"), self._text(values.get("correlation_id"), "correlation_id"),
-                    values.get("channel_name"), values.get("adapter"), int(bool(values.get("simulated", False))),
-                    values.get("status", "active"), self._timestamp(values.get("last_activity_at")),
+                    values.get("channel_name"), values.get("adapter"), bool(values.get("simulated", False)),
+                    values.get("status", "active"), last_activity_at,
                 ),
             )
         return self.get_conversation(values["conversation_id"])  # type: ignore[return-value]
@@ -679,9 +756,11 @@ class SQLiteRepository:
     create_conversation = save_conversation
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
-        result = self._row(self._fetchone("SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,)))
+        result = self._fetchone(
+            "SELECT * FROM aurafi.conversations WHERE conversation_id = %s", (conversation_id,)
+        )
+        result = _stringify_timestamps(result, ("last_activity_at",))
         if result:
-            result["simulated"] = bool(result["simulated"])
             result["channel"] = {"name": result["channel_name"], "adapter": result["adapter"], "simulated": result["simulated"]}
         return result
 
@@ -691,22 +770,21 @@ class SQLiteRepository:
             **conversation,
             "channel_name": conversation.get("channel_name", channel.get("name")),
             "adapter": conversation.get("adapter", channel.get("adapter")),
-            "simulated": conversation.get(
-                "simulated", channel.get("simulated", False)
-            ),
+            "simulated": conversation.get("simulated", channel.get("simulated", False)),
         }
+        last_activity_at = _to_datetime(values["last_activity_at"]) if values.get("last_activity_at") else self._now()
         with self._transaction() as connection:
             cursor = connection.execute(
-                """UPDATE conversations
-                SET channel_name = ?, adapter = ?, simulated = ?, status = ?,
-                    last_activity_at = ?
-                WHERE conversation_id = ? AND account_id = ?""",
+                """UPDATE aurafi.conversations
+                SET channel_name = %s, adapter = %s, simulated = %s, status = %s,
+                    last_activity_at = %s
+                WHERE conversation_id = %s AND account_id = %s""",
                 (
                     values.get("channel_name"),
                     values.get("adapter"),
-                    int(bool(values.get("simulated", False))),
+                    bool(values.get("simulated", False)),
                     values.get("status", "active"),
-                    self._timestamp(values.get("last_activity_at")),
+                    last_activity_at,
                     values.get("conversation_id"),
                     values.get("account_id"),
                 ),
@@ -716,6 +794,8 @@ class SQLiteRepository:
         return self.get_conversation(values["conversation_id"])  # type: ignore[return-value]
 
     def save_message(self, message: Mapping[str, Any]) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+
         conversation = self.get_conversation(message.get("conversation_id"))
         if conversation is None:
             raise ValueError("conversation_id desconhecido")
@@ -724,25 +804,26 @@ class SQLiteRepository:
         self._reject_secrets(payload)
         audit = self._mapping(message.get("audit", {}))
         channel = self._mapping(message.get("channel", {}))
+        occurred_at = _to_datetime(message["occurred_at"]) if message.get("occurred_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO messages
+                """INSERT INTO aurafi.messages
                 (message_id, conversation_id, account_id, session_id, envelope_version, message_type,
                  occurred_at, request_id, correlation_id, subject_type, email_verified, channel_name,
                  channel_adapter, channel_simulated, consent_id, payload, disclaimer, audit_source,
                  audit_schema_version, trace_id, audit_actor, audit_redaction, audit_llm, audit_data_sources)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'account', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'account', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     message.get("message_id"), message["conversation_id"], conversation["account_id"],
                     conversation["session_id"], message.get("envelope_version", "1.0"), message.get("message_type"),
-                    self._timestamp(message.get("occurred_at")), message.get("request_id"),
-                    message.get("correlation_id", conversation["correlation_id"]), int(bool(account and account["email_verified"])),
+                    occurred_at, message.get("request_id"),
+                    message.get("correlation_id", conversation["correlation_id"]), bool(account and account["email_verified"]),
                     channel.get("name", conversation["channel_name"]), channel.get("adapter", conversation["adapter"]),
-                    int(bool(channel.get("simulated", conversation["simulated"]))), conversation["consent_id"], self._json(payload),
+                    bool(channel.get("simulated", conversation["simulated"])), conversation["consent_id"], Jsonb(payload),
                     self._text(message.get("disclaimer"), "disclaimer"), audit.get("source", "local.repository"),
                     audit.get("schema_version", "1.0"), audit.get("trace_id"),
                     audit.get("actor", "user" if message.get("message_type") == "user_message" else "hub"),
-                    audit.get("redaction", "not_required"), self._json(audit.get("llm", {})), self._json(audit.get("data_sources", [])),
+                    audit.get("redaction", "not_required"), Jsonb(audit.get("llm", {})), Jsonb(audit.get("data_sources", [])),
                 ),
             )
         return self.get_message(message["message_id"])  # type: ignore[return-value]
@@ -750,70 +831,75 @@ class SQLiteRepository:
     create_message = save_message
 
     def get_message(self, message_id: str) -> dict[str, Any] | None:
-        result = self._row(self._fetchone("SELECT * FROM messages WHERE message_id = ?", (message_id,)))
+        result = self._fetchone("SELECT * FROM aurafi.messages WHERE message_id = %s", (message_id,))
         return self._decode_message(result)
 
     def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
-        return [self._decode_message(self._row(row)) for row in self._fetchall("SELECT * FROM messages WHERE conversation_id = ? ORDER BY occurred_at, message_id", (conversation_id,))]
+        rows = self._fetchall(
+            "SELECT * FROM aurafi.messages WHERE conversation_id = %s ORDER BY occurred_at, message_id",
+            (conversation_id,),
+        )
+        return [self._decode_message(row) for row in rows]
+
+    @staticmethod
+    def _decode_message(result: dict[str, Any] | None) -> dict[str, Any] | None:
+        result = _stringify_timestamps(result, ("occurred_at",))
+        if result is None:
+            return None
+        result["email_verified"] = bool(result["email_verified"])
+        result["channel_simulated"] = bool(result["channel_simulated"])
+        return result
 
     def save_conversation_runtime_state(
-        self,
-        conversation_id: str,
-        account_id: str,
-        state: Mapping[str, Any],
+        self, conversation_id: str, account_id: str, state: Mapping[str, Any]
     ) -> None:
+        from psycopg.types.json import Jsonb
+
         self._reject_secrets(state)
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO conversation_runtime_state
-                (conversation_id, account_id, state_json, updated_at)
-                VALUES (?, ?, ?, ?)""",
+                """INSERT INTO aurafi.conversation_runtime_state
+                (conversation_id, account_id, state, updated_at)
+                VALUES (%s, %s, %s, %s)""",
                 (
                     self._text(conversation_id, "conversation_id"),
                     self._text(account_id, "account_id"),
-                    self._json(state),
-                    self._timestamp(self._now()),
+                    Jsonb(dict(state)),
+                    self._now(),
                 ),
             )
 
     def get_conversation_runtime_state(self, conversation_id: str) -> dict[str, Any] | None:
-        row = self._row(
-            self._fetchone(
-                "SELECT state_json FROM conversation_runtime_state WHERE conversation_id = ?",
-                (conversation_id,),
-            )
+        row = self._fetchone(
+            "SELECT state FROM aurafi.conversation_runtime_state WHERE conversation_id = %s",
+            (conversation_id,),
         )
-        return json.loads(row["state_json"]) if row is not None else None
+        return row["state"] if row is not None else None
 
-    def latest_conversation_runtime_state(
-        self, account_id: str
-    ) -> dict[str, Any] | None:
-        row = self._row(
-            self._fetchone(
-                """SELECT state_json FROM conversation_runtime_state
-                WHERE account_id = ? ORDER BY updated_at DESC, conversation_id DESC
-                LIMIT 1""",
-                (account_id,),
-            )
+    def latest_conversation_runtime_state(self, account_id: str) -> dict[str, Any] | None:
+        row = self._fetchone(
+            """SELECT state FROM aurafi.conversation_runtime_state
+            WHERE account_id = %s ORDER BY updated_at DESC, conversation_id DESC
+            LIMIT 1""",
+            (account_id,),
         )
-        return json.loads(row["state_json"]) if row is not None else None
+        return row["state"] if row is not None else None
 
     def update_conversation_runtime_state(
-        self,
-        conversation_id: str,
-        account_id: str,
-        state: Mapping[str, Any],
+        self, conversation_id: str, account_id: str, state: Mapping[str, Any]
     ) -> None:
+        from psycopg.types.json import Jsonb
+
         self._reject_secrets(state)
         with self._transaction() as connection:
             cursor = connection.execute(
-                """UPDATE conversation_runtime_state
-                SET account_id = ?, state_json = ?, updated_at = ?
-                WHERE conversation_id = ?""",
+                """UPDATE aurafi.conversation_runtime_state
+                SET account_id = %s, state = %s, updated_at = %s
+                WHERE conversation_id = %s""",
                 (
                     self._text(account_id, "account_id"),
-                    self._json(state),
-                    self._timestamp(self._now()),
+                    Jsonb(dict(state)),
+                    self._now(),
                     self._text(conversation_id, "conversation_id"),
                 ),
             )
@@ -823,16 +909,17 @@ class SQLiteRepository:
     def save_alert(self, alert: Mapping[str, Any]) -> dict[str, Any]:
         source = self._mapping(alert.get("data_source", {}))
         observation_id = alert.get("data_source_observation_id") or source.get("observation_id")
+        created_at = _to_datetime(alert["created_at"]) if alert.get("created_at") else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO alerts
+                """INSERT INTO aurafi.alerts
                 (alert_id, account_id, opportunity_id, data_source_observation_id, type, title, message,
                  status, created_at, observed_at, suggested_action, disclaimer)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     alert.get("alert_id"), alert.get("account_id"), alert.get("opportunity_id"), observation_id,
                     alert.get("type"), alert.get("title"), alert.get("message"), alert.get("status", "unread"),
-                    self._timestamp(alert.get("created_at")), self._optional_timestamp(alert.get("observed_at", source.get("observed_at"))),
+                    created_at, _to_optional_datetime(alert.get("observed_at", source.get("observed_at"))),
                     alert.get("suggested_action", "none"), self._text(alert.get("disclaimer"), "disclaimer"),
                 ),
             )
@@ -841,31 +928,34 @@ class SQLiteRepository:
     create_alert = save_alert
 
     def get_alert(self, alert_id: str) -> dict[str, Any] | None:
-        return self._row(self._fetchone("SELECT * FROM alerts WHERE alert_id = ?", (alert_id,)))
+        row = self._fetchone("SELECT * FROM aurafi.alerts WHERE alert_id = %s", (alert_id,))
+        return _stringify_timestamps(row, ("created_at", "observed_at"))
 
     def list_alerts(self, account_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
         if status is None:
-            rows = self._fetchall("SELECT * FROM alerts WHERE account_id = ? ORDER BY created_at, alert_id", (account_id,))
+            rows = self._fetchall(
+                "SELECT * FROM aurafi.alerts WHERE account_id = %s ORDER BY created_at, alert_id", (account_id,)
+            )
         else:
-            rows = self._fetchall("SELECT * FROM alerts WHERE account_id = ? AND status = ? ORDER BY created_at, alert_id", (account_id, status))
-        return [self._row(row) for row in rows]
+            rows = self._fetchall(
+                "SELECT * FROM aurafi.alerts WHERE account_id = %s AND status = %s ORDER BY created_at, alert_id",
+                (account_id, status),
+            )
+        return [_stringify_timestamps(row, ("created_at", "observed_at")) for row in rows]
 
     def mark_alert_read(self, alert_id: str) -> dict[str, Any] | None:
         with self._transaction() as connection:
-            connection.execute("UPDATE alerts SET status = 'read' WHERE alert_id = ?", (alert_id,))
+            connection.execute("UPDATE aurafi.alerts SET status = 'read' WHERE alert_id = %s", (alert_id,))
         return self.get_alert(alert_id)
 
     def get_idempotent_response(
         self, principal: str, route: str, idempotency_key: str
     ) -> dict[str, Any] | None:
-        row = self._fetchone(
-            "SELECT * FROM idempotent_responses WHERE principal = ? AND route = ? AND idempotency_key = ?",
+        return self._fetchone(
+            """SELECT * FROM aurafi.idempotent_responses
+            WHERE principal = %s AND route = %s AND idempotency_key = %s""",
             (principal, route, idempotency_key),
         )
-        result = self._row(row)
-        if result is not None:
-            result["response_payload"] = json.loads(result["response_payload"])
-        return result
 
     def save_idempotent_response(
         self,
@@ -878,28 +968,30 @@ class SQLiteRepository:
         response_payload: Any,
         created_at: Any = None,
     ) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+
+        timestamp = _to_datetime(created_at) if created_at is not None else self._now()
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO idempotent_responses
+                """INSERT INTO aurafi.idempotent_responses
                 (principal, route, idempotency_key, request_hash, response_status, response_payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     self._text(principal, "principal"),
                     self._text(route, "route"),
                     self._text(idempotency_key, "idempotency_key"),
                     self._text(request_hash, "request_hash"),
                     int(response_status),
-                    self._json(response_payload),
-                    self._timestamp(created_at),
+                    Jsonb(response_payload),
+                    timestamp,
                 ),
             )
         return self.get_idempotent_response(principal, route, idempotency_key)  # type: ignore[return-value]
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self) -> Iterator[Any]:
         with self._lock:
             connection = self._require_connection()
-            connection.execute("BEGIN")
             try:
                 yield connection
             except Exception:
@@ -908,17 +1000,23 @@ class SQLiteRepository:
             else:
                 connection.commit()
 
-    def _fetchone(self, query: str, parameters: tuple[Any, ...]) -> sqlite3.Row | None:
+    def _fetchone(self, query: str, parameters: tuple[Any, ...]) -> dict[str, Any] | None:
         with self._lock:
-            return self._require_connection().execute(query, parameters).fetchone()
+            connection = self._require_connection()
+            with connection.cursor(row_factory=self._dict_row) as cursor:
+                cursor.execute(query, parameters)
+                return cursor.fetchone()
 
-    def _fetchall(self, query: str, parameters: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+    def _fetchall(self, query: str, parameters: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         with self._lock:
-            return self._require_connection().execute(query, parameters).fetchall()
+            connection = self._require_connection()
+            with connection.cursor(row_factory=self._dict_row) as cursor:
+                cursor.execute(query, parameters)
+                return cursor.fetchall()
 
-    def _require_connection(self) -> sqlite3.Connection:
-        if self._connection is None:
-            raise RuntimeError("SQLiteRepository ja foi fechado")
+    def _require_connection(self) -> Any:
+        if self._connection is None or self._connection.closed:
+            raise RuntimeError("PostgresRepository ja foi fechado")
         return self._connection
 
     @staticmethod
@@ -938,22 +1036,6 @@ class SQLiteRepository:
             raise ValueError(f"{name} e obrigatorio")
         return str(value)
 
-    def _timestamp(self, value: Any) -> str:
-        if value is None:
-            value = self._now()
-        if isinstance(value, str):
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        elif isinstance(value, datetime):
-            parsed = value
-        else:
-            raise TypeError("timestamp deve ser datetime ou ISO-8601")
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).strftime(_TIMESTAMP_FORMAT)
-
-    def _optional_timestamp(self, value: Any) -> str | None:
-        return None if value is None else self._timestamp(value)
-
     @staticmethod
     def _normalize_email(email: Any) -> str:
         if email is None or not str(email).strip():
@@ -961,49 +1043,8 @@ class SQLiteRepository:
         return str(email).strip().lower()
 
     @staticmethod
-    def _bool_or_none(value: Any) -> int | None:
-        return None if value is None else int(bool(value))
-
-    @staticmethod
-    def _json(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-    @staticmethod
-    def _digest_secret(value: Any) -> str:
-        return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _row(row: sqlite3.Row | Mapping[str, Any] | None) -> dict[str, Any] | None:
-        if row is None:
-            return None
-        result = dict(row)
-        for key in ("email_verified", "read_only", "is_stale", "execution_supported", "compare_idle_stablecoin", "simulated", "channel_simulated"):
-            if key in result and result[key] is not None:
-                result[key] = bool(result[key])
-        return result
-
-    def _decode_message(self, result: dict[str, Any] | None) -> dict[str, Any] | None:
-        if result is None:
-            return None
-        for key in ("payload", "audit_llm", "audit_data_sources"):
-            result[key] = json.loads(result[key])
-        result["email_verified"] = bool(result["email_verified"])
-        result["channel_simulated"] = bool(result["channel_simulated"])
-        return result
-
-    @staticmethod
-    def _decode_channel_identity(
-        result: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        if result is None:
-            return None
-        result["simulated"] = bool(result["simulated"])
-        result["channel"] = {
-            "name": result["channel_name"],
-            "adapter": result["adapter"],
-            "simulated": result["simulated"],
-        }
-        return result
+    def _bool_or_none(value: Any) -> bool | None:
+        return None if value is None else bool(value)
 
     @staticmethod
     def _validate_risk_dimensions(dimensions: Iterable[str]) -> None:
@@ -1024,22 +1065,18 @@ class SQLiteRepository:
                 cls._reject_secrets(nested)
 
 
-Repository = SQLiteRepository
+def create_repository(database_url: str | None) -> PostgresRepository | None:
+    """Cria e migra o adapter PostgreSQL quando ``DATABASE_URL`` foi configurada.
 
-
-def create_repository(database_path: str | Path | None) -> SQLiteRepository | None:
-    """Cria e inicializa o adapter SQLite quando um caminho foi configurado.
-
-    Sem caminho, retorna ``None`` para que o chamador preserve seu modo em
-    memória explicitamente. Erros de abertura ou inicialização são propagados;
-    não há fallback silencioso para outro armazenamento.
+    Sem URL, retorna ``None``. Erros de conexao ou de migracao sao propagados;
+    nao ha fallback silencioso para outro armazenamento.
     """
 
-    if database_path is None or not str(database_path).strip():
+    if database_url is None or not str(database_url).strip():
         return None
-    repository = SQLiteRepository(str(database_path).strip())
+    repository = PostgresRepository(str(database_url).strip())
     repository.initialize()
     return repository
 
 
-__all__ = ["Repository", "SQLiteRepository", "create_repository"]
+__all__ = ["PostgresRepository", "create_repository"]

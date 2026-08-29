@@ -35,6 +35,21 @@ class ContractStaticTests(unittest.TestCase):
         cls.openapi = OPENAPI.read_text(encoding="utf-8")
         cls.envelope = ENVELOPE.read_text(encoding="utf-8")
 
+    def test_openapi_nao_tem_valor_plano_sem_aspas_contendo_dois_pontos(self) -> None:
+        offenders: list[str] = []
+        for lineno, line in enumerate(self.openapi.splitlines(), start=1):
+            match = re.match(r"^(\s*)([A-Za-z0-9_.$-]+):\s+(.*\S)\s*$", line)
+            if not match:
+                continue
+            _indent, _key, value = match.groups()
+            if value.startswith(('"', "'", "|", ">", "[", "{", "&", "*", "!", "#")):
+                continue
+            if value in {"true", "false", "null", "~"}:
+                continue
+            if re.search(r":\s", value):
+                offenders.append(f"linha {lineno}: {line!r}")
+        self.assertEqual([], offenders, "valores YAML sem aspas quebrariam o parser: " + "; ".join(offenders))
+
     def test_openapi_declara_escopo_mvp_sem_wallet_open_finance_ou_execucao(self) -> None:
         self.assertIn("openapi: 3.0.3", self.openapi)
         self.assertIn("authentication: internal_email_otp", self.openapi)

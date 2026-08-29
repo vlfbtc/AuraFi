@@ -219,6 +219,38 @@ class SQLiteRepositoryTest(unittest.TestCase):
         self.assertEqual(alert["status"], "unread")
         self.assertEqual(self.repository.mark_alert_read("alert-1")["status"], "read")
 
+    def test_idempotent_response_round_trips_and_rejects_duplicate_key(self) -> None:
+        self.assertIsNone(
+            self.repository.get_idempotent_response("principal-1", "POST /v1/simulations", "key-1")
+        )
+        saved = self.repository.save_idempotent_response(
+            principal="principal-1",
+            route="POST /v1/simulations",
+            idempotency_key="key-1",
+            request_hash="hash-1",
+            response_status=201,
+            response_payload={"simulation": {"simulation_id": "simulation-1"}},
+            created_at=NOW,
+        )
+        self.assertEqual(saved["response_status"], 201)
+        self.assertEqual(saved["response_payload"]["simulation"]["simulation_id"], "simulation-1")
+
+        fetched = self.repository.get_idempotent_response(
+            "principal-1", "POST /v1/simulations", "key-1"
+        )
+        self.assertEqual(fetched["request_hash"], "hash-1")
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.repository.save_idempotent_response(
+                principal="principal-1",
+                route="POST /v1/simulations",
+                idempotency_key="key-1",
+                request_hash="hash-2",
+                response_status=201,
+                response_payload={"simulation": {"simulation_id": "simulation-2"}},
+                created_at=NOW,
+            )
+
     def test_profile_write_is_atomic_and_connection_closes(self) -> None:
         self.repository.create_account({"account_id": "acct-1", "email": "a@example.test"}, created_at=NOW)
         with self.assertRaises(ValueError):

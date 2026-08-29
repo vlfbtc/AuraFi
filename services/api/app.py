@@ -11,11 +11,12 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
+import json
 from math import ceil
 import os
 from threading import RLock
 from time import monotonic
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
@@ -616,14 +617,18 @@ class AuraFiApp:
         self._llm_request_limit = _env_positive_int("AURAFI_LLM_REQUEST_LIMIT", 30)
         self._profiles: dict[str, RiskProfile] = {}
         self._alerts: dict[str, list[dict[str, Any]]] = {}
+        self._idempotent_responses: dict[tuple[str, str, str], dict[str, Any]] = {}
         dev_otp = os.environ.get("AURAFI_DEV_OTP_CODE")
         otp_generator = FixedOtpGenerator(dev_otp) if dev_otp and not self.is_production else None
 
         initial_account = account or Account("acc_maria", "maria@example.com")
+        database_url = os.environ.get("DATABASE_URL", "").strip()
         database_path = os.environ.get("AURAFI_DB_PATH", "").strip()
-        if self.is_production and (not database_path or database_path == ":memory:"):
-            raise ValueError("AURAFI_DB_PATH persistente é obrigatório em produção")
-        self.persistence: SQLiteRepository | None = create_repository(database_path or None)
+        if self.is_production and not database_url and (not database_path or database_path == ":memory:"):
+            raise ValueError(
+                "DATABASE_URL (PostgreSQL) ou AURAFI_DB_PATH persistente é obrigatório em produção"
+            )
+        self.persistence, self.persistence_kind = self._create_persistence(database_url, database_path)
         if self.persistence is None:
             self.account_repository = InMemoryAccountRepository([initial_account])
             self._challenges = InMemoryOtpChallengeRepository()
@@ -703,8 +708,19 @@ class AuraFiApp:
         )
         self.simulated_channel = SimulatedChannelAdapter(self.conversation)
 
+    @staticmethod
+    def _create_persistence(database_url: str, database_path: str) -> tuple[Any, str]:
+        """DATABASE_URL (Postgres) tem prioridade sobre AURAFI_DB_PATH (SQLite); import de psycopg é lazy."""
+
+        if database_url:
+            from database.postgres.repository import create_repository as create_postgres_repository
+
+            return create_postgres_repository(database_url), "postgres"
+        repository = create_repository(database_path or None)
+        return repository, ("sqlite" if repository is not None else "memory")
+
     def close(self) -> None:
-        """Fecha o SQLite opcional; o modo em memória não possui lifecycle."""
+        """Fecha a persistência opcional; o modo em memória não possui lifecycle."""
 
         if self.persistence is not None:
             self.persistence.close()
@@ -767,14 +783,16 @@ class AuraFiApp:
                 return self._logout(request)
             if route == ("GET", "/v1/profile"):
                 return self._get_profile_response(request)
-            if route in {("GET", "/v1/profile/risk"), ("PUT", "/v1/profile/risk")}:
+            if route == ("GET", "/v1/profile/risk"):
                 return self._profile_risk(request)
+            if route == ("PUT", "/v1/profile/risk"):
+                return self._dispatch_idempotent(request, lambda: self._profile_risk(request))
             if route == ("GET", "/v1/opportunities"):
                 return self._opportunities(request)
             if route == ("POST", "/v1/simulations"):
-                return self._simulation(request)
+                return self._dispatch_idempotent(request, lambda: self._simulation(request))
             if route == ("POST", "/v1/recommendations"):
-                return self._recommendation(request)
+                return self._dispatch_idempotent(request, lambda: self._recommendation(request))
             if route == ("POST", "/v1/conversations"):
                 return self._create_conversation(request)
             if route == ("GET", "/v1/alerts"):
@@ -790,7 +808,9 @@ class AuraFiApp:
 
             conversation_message = _conversation_message_route(request.path)
             if method == "POST" and conversation_message is not None:
-                return self._conversation_message(request, conversation_message)
+                return self._dispatch_idempotent(
+                    request, lambda: self._conversation_message(request, conversation_message)
+                )
             conversation_get = _conversation_get_route(request.path)
             if method == "GET" and conversation_get is not None:
                 return self._get_conversation(request, conversation_get)
@@ -868,7 +888,7 @@ class AuraFiApp:
             "version": self.version,
             "checks": {
                 "identity": self.identity_delivery_mode,
-                "persistence": "sqlite" if self.persistence is not None else "memory",
+                "persistence": self.persistence_kind,
                 "market_data": self.market_mode,
                 "llm": self.llm_mode,
             },
@@ -1287,6 +1307,59 @@ class AuraFiApp:
         if scheme.casefold() != "bearer" or not token.strip():
             raise AuthenticationError()
         return token.strip()
+
+    def _dispatch_idempotent(
+        self, request: Request, handler: Callable[[], Response]
+    ) -> Response:
+        """Mesma chave e corpo reexibe a resposta original; corpo diferente é 409, nunca sobrescreve."""
+
+        idempotency_key = _header(request.headers, "idempotency-key")
+        if not idempotency_key:
+            return handler()
+        try:
+            principal = sha256(self._bearer(request).encode("utf-8")).hexdigest()
+        except AuthenticationError:
+            return handler()
+        route = f"{request.method.upper()} {request.path.rstrip('/') or '/'}"
+        body_hash = sha256(
+            json.dumps(request.body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        if self.persistence is not None:
+            cached = self.persistence.get_idempotent_response(principal, route, idempotency_key)
+        else:
+            with self._lock:
+                cached = self._idempotent_responses.get((principal, route, idempotency_key))
+        if cached is not None:
+            if cached["request_hash"] != body_hash:
+                return self._error_response(
+                    request,
+                    409,
+                    "IDEMPOTENCY_KEY_CONFLICT",
+                    "Idempotency-Key ja foi usada com um corpo de requisicao diferente.",
+                    retryable=False,
+                )
+            return Response(int(cached["response_status"]), cached["response_payload"])
+        response = handler()
+        if response.status < 300:
+            if self.persistence is not None:
+                self.persistence.save_idempotent_response(
+                    principal=principal,
+                    route=route,
+                    idempotency_key=idempotency_key,
+                    request_hash=body_hash,
+                    response_status=response.status,
+                    response_payload=response.payload,
+                )
+            else:
+                with self._lock:
+                    self._idempotent_responses[(principal, route, idempotency_key)] = {
+                        "request_hash": body_hash,
+                        "response_status": response.status,
+                        "response_payload": response.payload,
+                    }
+        return response
 
     def _get_profile(self, account_id: str) -> RiskProfile | None:
         if self.persistence is not None:

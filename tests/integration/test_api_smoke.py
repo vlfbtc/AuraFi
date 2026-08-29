@@ -82,6 +82,74 @@ class ApiSmokeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             allowed_origins_from_env("*")
 
+    def test_cors_preflight_allows_patch_and_advertises_idempotency_key(self) -> None:
+        self.connection.request(
+            "OPTIONS",
+            "/v1/alerts/alert-test-1",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "Content-Type, Idempotency-Key",
+            },
+        )
+        response = self.connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 204)
+        allow_headers = response.getheader("Access-Control-Allow-Headers") or ""
+        self.assertIn("Idempotency-Key", allow_headers)
+        allow_methods = response.getheader("Access-Control-Allow-Methods") or ""
+        self.assertIn("PATCH", allow_methods)
+
+    def test_idempotency_key_replays_response_and_flags_conflict(self) -> None:
+        status, requested = self.request(
+            "POST",
+            "/v1/auth/otp/request",
+            {"email": "maria@example.com", "channel": "web_widget"},
+        )
+        self.assertEqual(status, 202)
+        otp = self.app.otp_sink.code_for(requested["challenge_id"])
+        status, authenticated = self.request(
+            "POST",
+            "/v1/auth/otp/verify",
+            {"challenge_id": requested["challenge_id"], "otp": otp},
+        )
+        self.assertEqual(status, 200)
+        token = authenticated["session"]["access_token"]
+
+        status, opportunities = self.request("GET", "/v1/opportunities", token=token)
+        self.assertEqual(status, 200)
+        opportunity = opportunities["items"][0]
+        payload = {
+            "opportunity_id": opportunity["opportunity_id"],
+            "amount": 1000,
+            "asset": opportunity["asset"],
+            "horizons_days": [30, 180, 365],
+        }
+        headers = {"Idempotency-Key": "sim-key-1"}
+
+        status_first, first = self.request("POST", "/v1/simulations", payload, token, headers=headers)
+        self.assertEqual(status_first, 201)
+        status_second, second = self.request("POST", "/v1/simulations", payload, token, headers=headers)
+        self.assertEqual(status_second, 201)
+        self.assertEqual(
+            first["simulation"]["simulation_id"], second["simulation"]["simulation_id"]
+        )
+
+        conflicting_payload = {**payload, "amount": 2000}
+        status_conflict, conflict = self.request(
+            "POST", "/v1/simulations", conflicting_payload, token, headers=headers
+        )
+        self.assertEqual(status_conflict, 409)
+        self.assertEqual(conflict["error"]["code"], "IDEMPOTENCY_KEY_CONFLICT")
+
+        status_third, third = self.request(
+            "POST", "/v1/simulations", payload, token, headers={"Idempotency-Key": "sim-key-2"}
+        )
+        self.assertEqual(status_third, 201)
+        self.assertNotEqual(
+            first["simulation"]["simulation_id"], third["simulation"]["simulation_id"]
+        )
+
     def test_otp_requests_are_rate_limited_by_source(self) -> None:
         last = None
         for _ in range(6):

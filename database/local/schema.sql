@@ -323,6 +323,19 @@ CREATE TABLE IF NOT EXISTS alerts (
         ON DELETE RESTRICT
 );
 
+-- Backs the Idempotency-Key contract (contracts/openapi.yaml); `principal`
+-- is a SHA-256 digest of the bearer token, never the token itself.
+CREATE TABLE IF NOT EXISTS idempotent_responses (
+    principal TEXT NOT NULL,
+    route TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_status INTEGER NOT NULL CHECK (response_status >= 200 AND response_status < 300),
+    response_payload TEXT NOT NULL CHECK (json_valid(response_payload)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (principal, route, idempotency_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_channel_identities_account
     ON channel_identities(account_id, created_at);
@@ -333,5 +346,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_conversation_runtime_account
     ON conversation_runtime_state(account_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_account_status ON alerts(account_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_idempotent_responses_created ON idempotent_responses(created_at);
 
 COMMIT;
