@@ -9,7 +9,10 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
 
 - API HTTP versionada com contrato OpenAPI e erros estruturados.
 - Autenticação OTP por e-mail, refresh com rotação e logout com revogação.
-- Envio real por SMTP compatível com Resend; nenhum OTP fixo é aceito em produção.
+- Envio real por SMTP compatível com Resend; nenhum OTP fixo é aceito em
+  produção. Fluxo completo (requisição → e-mail real → verificação → sessão)
+  confirmado em produção em 2026-08-29 via Web Widget com destinatário real;
+  domínio `aurafi.com.br` verificado no Resend.
 - Persistência SQLite de identidade canônica, identidades por canal, sessões,
   perfil de risco, consentimento, conversas, mensagens e alertas.
 - Dados de mercado reais via API pública da DeFiLlama, com origem, frescor e
@@ -38,6 +41,17 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
   de conversa não funcionariam em PostgreSQL). Validado ponta a ponta contra
   PostgreSQL 16 local, incluindo persistência de perfil de risco e conversa
   após reinício do processo.
+- Geração real de alertas (BE-008 `services/notifications/alerts.py`, motor
+  já existente, agora com política concreta e disparo ligado à leitura de
+  mercado). Cada `GET /v1/opportunities`, detalhe, simulação e recomendação
+  compara o snapshot atual ao último observado; muda ≥2pp de APY, muda o
+  nível de risco derivado (`derive_risk_level`) ou aparece uma oportunidade
+  nova → alerta é persistido de verdade (nunca na primeira leitura, que só
+  estabelece a base, e nunca duplicado para a mesma mudança). `data_stale`
+  continua desabilitado por não mapear para uma única oportunidade de forma
+  limpa. Thresholds em `DEFAULT_ALERT_POLICY` (`services/api/app.py`) são um
+  default de MVP, ajustável e sem gate de compliance (ao contrário da
+  política de recomendação).
 
 ### Clientes
 
@@ -49,8 +63,17 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
   logout.
 - Chat com envio otimista e estados por mensagem (enviando, enviada, não
   enviada com reenvio), tolerante a indisponibilidade da IA.
-- Web widget conectado por padrão a `https://aurafi-api.onrender.com`, com OTP,
-  perfil, conversa, retomada, rotação de sessão e logout real.
+- Tela de alertas real nos dois clientes (iOS: ícone de sino no painel inicial
+  com indicador de não lidos, sheet dedicado; Web Widget: ícone no cabeçalho
+  com contagem, tela própria), consumindo `GET /v1/alerts` e
+  `PATCH /v1/alerts/{id}` — antes desta rodada, a geração existia no backend
+  mas nenhum cliente exibia os alertas.
+- Web widget publicado em `https://aurafi-web-widget.onrender.com` (Render
+  Static Site, `render.yaml`, build a partir do mesmo repositório), conectado
+  por padrão a `https://aurafi-api.onrender.com`, com OTP, perfil, conversa,
+  retomada, rotação de sessão e logout real. Origem incluída em
+  `AURAFI_ALLOWED_ORIGINS` no serviço da API; testado ponta a ponta (preflight
+  CORS e requisição real) contra a API pública.
 - Estados explícitos de carregamento, vazio, indisponibilidade e erro nos fluxos
   principais, em português brasileiro; offline/cache sinalizado de forma
   discreta e erros de autenticação distintos de falhas de conexão.
@@ -68,29 +91,11 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
 
 ## Dependências externas em ativação
 
-### Resend / OTP
-
-O código está pronto. O domínio `aurafi.com.br` precisa terminar a verificação
-DNS no Resend. Depois disso, no Render:
-
-1. definir `AURAFI_OTP_FROM_EMAIL=nao-responder@aurafi.com.br`;
-2. conferir `AURAFI_OTP_SMTP_HOST=smtp.resend.com`;
-3. conferir `AURAFI_OTP_SMTP_PORT=587`,
-   `AURAFI_OTP_SMTP_STARTTLS=true` e `AURAFI_OTP_SMTP_SSL=false`;
-4. usar `resend` como usuário SMTP e uma API key de envio como senha;
-5. salvar, redeployar e testar o fluxo OTP com um e-mail real.
-
 ### Anthropic
 
 É necessário manter no Render uma chave ativa com créditos em
 `AURAFI_ANTHROPIC_API_KEY`. O modelo padrão está configurado por variável de
 ambiente; falhas do provedor geram resposta degradada explícita.
-
-### Web widget
-
-O bundle está pronto para hospedagem, mas ainda precisa de um provedor web e de
-um domínio/origem definitivos. Essa origem deve ser acrescentada exatamente em
-`AURAFI_ALLOWED_ORIGINS` no Render; curingas não são aceitos em produção.
 
 ### Analytics
 
@@ -105,7 +110,6 @@ não definem regras aprovadas suficientes:
 
 - política de elegibilidade e ranking de recomendações;
 - fórmula oficial, premissas e disclaimer final da simulação;
-- thresholds e frequência dos alertas de risco/oportunidade;
 - texto jurídico final de privacidade, termos, retenção e exclusão;
 - critérios e operação do fallback humano;
 - canais WhatsApp e Telegram e seus respectivos provedores;

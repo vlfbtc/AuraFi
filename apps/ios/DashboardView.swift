@@ -4,6 +4,7 @@ struct DashboardView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var selectedOpportunity: Opportunity?
     @State private var showSettings = false
+    @State private var showAlerts = false
 
     var body: some View {
         TabView(selection: $appModel.selectedTab) {
@@ -63,11 +64,23 @@ struct DashboardView: View {
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showAlerts = true } label: {
+                        Image(systemName: appModel.unreadAlertCount > 0 ? "bell.badge" : "bell")
+                    }
+                    .accessibilityLabel(
+                        appModel.unreadAlertCount > 0
+                            ? "Abrir alertas, \(appModel.unreadAlertCount) não lidos"
+                            : "Abrir alertas"
+                    )
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Abrir ajustes")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showAlerts) {
+                AlertsView()
+                    .environmentObject(appModel)
+            }
             .sheet(item: $selectedOpportunity) { opportunity in
                 OpportunityDetailView(opportunity: opportunity)
                     .environmentObject(appModel)
@@ -1494,4 +1507,96 @@ private func shortTimeLabel(_ iso: String) -> String? {
 
 private func gainLabel(_ scenario: SimulationScenario, principal: Double) -> String {
     scenario.projectedGainDisplay ?? assetAmount(scenario.projectedValue - principal, asset: scenario.currency)
+}
+
+struct AlertsView: View {
+    @EnvironmentObject private var appModel: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AuraTheme.lavender.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let errorMessage = appModel.alertsErrorMessage {
+                            ErrorCard(message: errorMessage) {
+                                Task { await appModel.loadAlerts() }
+                            }
+                        }
+
+                        if appModel.isLoadingAlerts && appModel.alerts.isEmpty {
+                            ProgressView("Carregando alertas…")
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 40)
+                        } else if appModel.alerts.isEmpty {
+                            EmptyStateCard(
+                                title: "Nenhum alerta por aqui",
+                                message: "Quando o mercado observado mudar de forma relevante, você verá os alertas aqui.",
+                                icon: "bell.slash",
+                                actionTitle: "Explorar oportunidades"
+                            ) {
+                                dismiss()
+                                appModel.selectedTab = .explore
+                            }
+                        } else {
+                            ForEach(appModel.alerts) { alert in
+                                AlertCard(alert: alert) {
+                                    Task { await appModel.markAlertRead(alert) }
+                                }
+                            }
+                        }
+                        DisclaimerCard()
+                    }
+                    .padding(18)
+                }
+                .refreshable { await appModel.loadAlerts() }
+            }
+            .navigationTitle("Alertas")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fechar") { dismiss() }
+                }
+            }
+            .task { await appModel.loadAlerts() }
+        }
+    }
+}
+
+private struct AlertCard: View {
+    let alert: Alert
+    let markRead: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(alert.status == .unread ? AuraTheme.pink : Color.gray.opacity(0.4))
+                .frame(width: 6, height: 84)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label(alert.type.title, systemImage: alert.type.iconName)
+                        .font(.caption.bold())
+                        .foregroundStyle(AuraTheme.pink)
+                    Spacer()
+                    if let time = shortTimeLabel(alert.createdAt) {
+                        Text(time).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Text(alert.title).font(.headline)
+                Text(alert.message).font(.subheadline).foregroundStyle(.secondary)
+                Text(alert.disclaimer).font(.caption2).foregroundStyle(.secondary.opacity(0.8))
+                if alert.status == .unread {
+                    Button("Marcar como lido", action: markRead)
+                        .font(.caption.bold())
+                        .buttonStyle(.bordered)
+                        .tint(AuraTheme.pink)
+                }
+            }
+        }
+        .padding(14)
+        .background(.white, in: RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(AuraTheme.border) }
+        .accessibilityElement(children: .combine)
+    }
 }

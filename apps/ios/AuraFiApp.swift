@@ -237,6 +237,10 @@ final class AppModel: ObservableObject {
     @Published var conversationMessages: [ChatDisplayMessage] = []
     @Published var conversationConsent: ConversationConsent?
     @Published var decisions: [DecisionRecord]
+    @Published var alerts: [Alert] = []
+    @Published var unreadAlertCount = 0
+    @Published var isLoadingAlerts = false
+    @Published var alertsErrorMessage: String?
     @Published var isUsingCachedMarket = false
     @Published var isRefreshingMarket = false
     @Published var marketRefreshFeedback: MarketRefreshFeedback?
@@ -462,6 +466,33 @@ final class AppModel: ObservableObject {
         await minimumDuration
     }
 
+    func loadAlerts() async {
+        guard let session else { return }
+        isLoadingAlerts = true
+        defer { isLoadingAlerts = false }
+        do {
+            let response = try await apiClient.listAlerts(sessionToken: session.accessToken, pageSize: 50)
+            self.alerts = response.items
+            self.unreadAlertCount = response.items.filter { $0.status == .unread }.count
+            self.alertsErrorMessage = nil
+        } catch {
+            self.alertsErrorMessage = (error as? LocalizedError)?.errorDescription ?? "Não foi possível carregar os alertas."
+        }
+    }
+
+    func markAlertRead(_ alert: Alert) async {
+        guard let session, alert.status == .unread else { return }
+        do {
+            let updated = try await apiClient.markAlertRead(sessionToken: session.accessToken, alertId: alert.alertId)
+            if let index = alerts.firstIndex(where: { $0.alertId == alert.alertId }) {
+                alerts[index] = updated
+            }
+            unreadAlertCount = max(0, unreadAlertCount - 1)
+        } catch {
+            // Melhor esforço: o alerta permanece não lido na tela e o usuário pode tentar de novo.
+        }
+    }
+
     func opportunityDetail(for opportunityId: String) async throws -> Opportunity {
         guard let session else {
             throw AuraFiAPIError.server(
@@ -489,6 +520,7 @@ final class AppModel: ObservableObject {
             declaredProfile = profile.riskProfile?.declaredProfile
             await restoreConversation(sessionToken: session.accessToken)
             await loadOpportunities()
+            await loadAlerts()
         } catch AuraFiAPIError.server(let status, _, _) where status == 401 {
             do {
                 let refreshed = try await apiClient.refreshSession(refreshToken: session.refreshToken)
@@ -499,6 +531,7 @@ final class AppModel: ObservableObject {
                 declaredProfile = profile.riskProfile?.declaredProfile
                 await restoreConversation(sessionToken: refreshed.accessToken)
                 await loadOpportunities()
+                await loadAlerts()
             } catch {
                 restart()
                 errorMessage = "Sua sessão expirou. Entre novamente para continuar."
@@ -714,6 +747,9 @@ final class AppModel: ObservableObject {
         opportunities = []
         marketSource = nil
         lastSimulation = nil
+        alerts = []
+        unreadAlertCount = 0
+        alertsErrorMessage = nil
         selectedTab = .dashboard
         conversation = nil
         conversationMessages = []

@@ -482,6 +482,13 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .decision-badge.accepted { background: #e4f8ed; color: #176b48; }
 .decision-badge.refused { background: #fff0f7; color: #8a2858; }
 
+.header-alerts-button { background: transparent; border: 1px solid var(--line); border-radius: 999px; font-size: 16px; line-height: 1; min-height: 44px; min-width: 44px; padding: 8px 12px; position: relative; }
+.header-alerts-button:hover { border-color: var(--coral); }
+.alert-count-badge { background: var(--coral); border-radius: 999px; color: #fff; font-family: Consolas, 'Courier New', monospace; font-size: 10px; font-weight: 700; min-width: 16px; padding: 1px 4px; position: absolute; right: -4px; text-align: center; top: -4px; }
+.alert-badge { border-radius: 999px; display: inline-block; font-family: Consolas, 'Courier New', monospace; font-size: 10px; padding: 6px 9px; text-transform: uppercase; }
+.alert-badge.unread { background: #fff0f7; color: var(--coral-dark); }
+.alert-badge.read { background: var(--mint); color: var(--muted); }
+
 .modal-backdrop { background: rgba(24, 11, 42, 0.72); }
 .education-modal { box-shadow: 0 30px 100px rgba(24, 11, 42, 0.36); }
 .education-grid article { border-color: var(--coral); }

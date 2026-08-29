@@ -609,6 +609,84 @@ struct Pagination: Decodable {
     }
 }
 
+enum AlertType: String, Codable {
+    case apyChange = "apy_change"
+    case riskChange = "risk_change"
+    case newOpportunity = "new_opportunity"
+    case dataStale = "data_stale"
+
+    var title: String {
+        switch self {
+        case .apyChange: return "Mudança de APY"
+        case .riskChange: return "Mudança de risco"
+        case .newOpportunity: return "Nova oportunidade"
+        case .dataStale: return "Dado desatualizado"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .apyChange: return "chart.line.uptrend.xyaxis"
+        case .riskChange: return "exclamationmark.shield"
+        case .newOpportunity: return "sparkles"
+        case .dataStale: return "clock.badge.exclamationmark"
+        }
+    }
+}
+
+enum AlertStatus: String, Codable {
+    case unread
+    case read
+}
+
+enum AlertSuggestedAction: String, Codable {
+    case viewOpportunity = "view_opportunity"
+    case simulate
+    case askHub = "ask_hub"
+    case none
+}
+
+struct Alert: Identifiable, Decodable {
+    let alertId: String
+    let type: AlertType
+    let opportunityId: String?
+    let title: String
+    let message: String
+    let status: AlertStatus
+    let createdAt: String
+    let observedAt: String?
+    let dataSource: APIDataSource?
+    let suggestedAction: AlertSuggestedAction?
+    let disclaimer: String
+
+    var id: String { alertId }
+
+    enum CodingKeys: String, CodingKey {
+        case alertId = "alert_id"
+        case type
+        case opportunityId = "opportunity_id"
+        case title
+        case message
+        case status
+        case createdAt = "created_at"
+        case observedAt = "observed_at"
+        case dataSource = "data_source"
+        case suggestedAction = "suggested_action"
+        case disclaimer
+    }
+}
+
+struct AlertListResponse: Decodable {
+    let items: [Alert]
+    let pagination: Pagination
+    let meta: APIMeta?
+}
+
+struct AlertResponse: Decodable {
+    let alert: Alert
+    let meta: APIMeta?
+}
+
 struct SimulationInput: Encodable {
     let opportunityId: String
     let amount: Double
@@ -929,6 +1007,42 @@ struct AuraFiAPIClient {
         components?.queryItems = queryItems
         guard let url = components?.url else { throw AuraFiAPIError.invalidResponse }
         return try await send(url: url, method: "GET", body: Optional<Data>.none, token: sessionToken)
+    }
+
+    func listAlerts(
+        sessionToken: String,
+        page: Int = 1,
+        pageSize: Int = 20,
+        unreadOnly: Bool = false
+    ) async throws -> AlertListResponse {
+        guard page >= 1 else {
+            throw AuraFiAPIError.invalidParameter("A página deve começar em 1.")
+        }
+        guard (1...100).contains(pageSize) else {
+            throw AuraFiAPIError.invalidParameter("A quantidade por página deve estar entre 1 e 100.")
+        }
+        var components = URLComponents(url: try makeURL(path: "/v1/alerts"), resolvingAgainstBaseURL: false)
+        var queryItems = [
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "page_size", value: String(pageSize))
+        ]
+        if unreadOnly {
+            queryItems.append(URLQueryItem(name: "unread_only", value: "true"))
+        }
+        components?.queryItems = queryItems
+        guard let url = components?.url else { throw AuraFiAPIError.invalidResponse }
+        return try await send(url: url, method: "GET", body: Optional<Data>.none, token: sessionToken)
+    }
+
+    func markAlertRead(sessionToken: String, alertId: String) async throws -> Alert {
+        struct Body: Encodable { let status: String }
+        let response: AlertResponse = try await send(
+            method: "PATCH",
+            path: "/v1/alerts/\(alertId)",
+            body: Body(status: "read"),
+            token: sessionToken
+        )
+        return response.alert
     }
 
     func createSimulation(sessionToken: String, input: SimulationInput) async throws -> Simulation {

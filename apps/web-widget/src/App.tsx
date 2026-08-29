@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiClientError, createWidgetApi, widgetApi } from './api';
-import type { ApiMeta, AuthSession, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
+import type { Alert as ApiAlert, AlertType, ApiMeta, AuthSession, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
 
-type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub';
+type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub' | 'alerts';
 type ProfileLevel = 'conservative' | 'moderate' | 'aggressive';
 type ErrorKind = 'empty' | 'invalid' | 'network' | null;
 type ErrorContext = 'email' | 'otp' | 'quiz' | 'profile' | 'simulation';
@@ -410,6 +410,15 @@ function decisionStatusLabel(status: DecisionStatus): string {
   return status === 'accepted' ? 'Aceita' : 'Recusada';
 }
 
+function alertTypeLabel(type: AlertType): string {
+  return {
+    apy_change: 'Mudança de APY',
+    risk_change: 'Mudança de risco',
+    new_opportunity: 'Nova oportunidade',
+    data_stale: 'Dado desatualizado',
+  }[type];
+}
+
 function riskLabel(level: RiskLevel): string {
   return {
     low: 'Baixo',
@@ -532,6 +541,11 @@ export default function App() {
   const [opportunityMeta, setOpportunityMeta] = useState<ApiMeta | null>(null);
   const [opportunityFilter, setOpportunityFilter] = useState<'all' | RiskLevel>('all');
   const [opportunityRefreshKey, setOpportunityRefreshKey] = useState(0);
+  const [alertItems, setAlertItems] = useState<ApiAlert[]>([]);
+  const [alertsState, setAlertsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [alertsRefreshKey, setAlertsRefreshKey] = useState(0);
+  const unreadAlertCount = alertItems.filter((alert) => alert.status === 'unread').length;
   const [conversation, setConversation] = useState<ConversationData | null>(null);
   const [conversationDraft, setConversationDraft] = useState('');
   const [conversationState, setConversationState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -663,6 +677,44 @@ export default function App() {
       cancelled = true;
     };
   }, [apiClient, declaredProfile, opportunityRefreshKey, view]);
+
+  useEffect(() => {
+    if (!accessToken) return undefined;
+
+    let cancelled = false;
+    setAlertsState('loading');
+    setAlertsError(null);
+
+    apiClient.listAlerts(
+      { page: 1, pageSize: 50 },
+      { requestId: `widget_alerts_${Date.now()}` },
+    ).then((result) => {
+      if (cancelled) return;
+      setAlertItems(result.data.items);
+      setAlertsState('ready');
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      if (error instanceof ApiClientError && error.status === 401) {
+        clearAuthenticatedState();
+        setView('email');
+        return;
+      }
+      setAlertsState('error');
+      setAlertsError(error instanceof Error ? error.message : 'Não foi possível carregar os alertas agora.');
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, apiClient, alertsRefreshKey]);
+
+  const handleMarkAlertRead = (alertId: string) => {
+    apiClient.markAlertRead(alertId, { requestId: `widget_alert_read_${Date.now()}` }).then((result) => {
+      setAlertItems((current) => current.map((alert) => (alert.alertId === alertId ? result.data : alert)));
+    }).catch(() => {
+      // Melhor esforço: o alerta permanece não lido na tela e o usuário pode tentar de novo.
+    });
+  };
 
   useEffect(() => {
     if (!isEducationOpen) return undefined;
@@ -1183,6 +1235,47 @@ export default function App() {
     );
   };
 
+  const renderAlerts = () => (
+    <section className="history-section" aria-labelledby="alerts-title">
+      <div className="section-heading-row">
+        <div><p className="eyebrow">Avisos de mercado</p><h1 id="alerts-title" tabIndex={-1}>Alertas</h1></div>
+        <span className="list-count">{unreadAlertCount} não lidos</span>
+      </div>
+      <p className="section-intro">Avisos gerados quando o mercado observado muda de forma relevante. São informativos e não executam nenhuma ação financeira.</p>
+      <button className="back-button" type="button" onClick={() => setView('dashboard')}>← Voltar ao painel</button>
+
+      {alertsState === 'error' ? (
+        <InlineAlert message={alertsError ?? 'Não foi possível carregar os alertas agora.'} onRetry={() => setAlertsRefreshKey((key) => key + 1)} id="alerts-error" />
+      ) : alertsState === 'loading' && alertItems.length === 0 ? (
+        <div className="history-empty" role="status"><strong>Carregando alertas…</strong></div>
+      ) : alertItems.length === 0 ? (
+        <div className="history-empty" role="status">
+          <strong>Nenhum alerta por aqui.</strong>
+          <span>Quando o mercado observado mudar de forma relevante, os alertas aparecem aqui.</span>
+        </div>
+      ) : (
+        <div className="history-list">
+          {alertItems.map((alert) => (
+            <article className="history-card" key={alert.alertId}>
+              <div className="history-card-top">
+                <div><span className="opportunity-category">{alertTypeLabel(alert.type)}</span><h3>{alert.title}</h3></div>
+                <time dateTime={alert.createdAt}>{formatDateTime(alert.createdAt)}</time>
+              </div>
+              <p>{alert.message}</p>
+              <p className="disclaimer">{alert.disclaimer}</p>
+              <div className="history-card-top">
+                <span className={`alert-badge ${alert.status}`}>{alert.status === 'unread' ? 'Não lido' : 'Lido'}</span>
+                {alert.status === 'unread' ? (
+                  <button className="text-button" type="button" onClick={() => handleMarkAlertRead(alert.alertId)}>Marcar como lido</button>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
   const renderDecisionHistory = () => (
     <section className="history-section" aria-labelledby="history-title">
       <div className="section-heading-row">
@@ -1624,6 +1717,16 @@ export default function App() {
         <button className="brand-button" type="button" onClick={() => { if (accessToken) setView('dashboard'); else setView('welcome'); }} aria-label="AuraFi — voltar ao início"><AuraMark /><span>AuraFi</span></button>
         <div className="header-session">
           <span className="header-caption">Web Widget · {view === 'hub' ? 'Aura conectada' : view === 'dashboard' || view === 'opportunity' || view === 'simulation' ? 'estudo informativo' : 'onboarding'}</span>
+          {accessToken ? (
+            <button
+              className="header-alerts-button"
+              type="button"
+              onClick={() => setView('alerts')}
+              aria-label={unreadAlertCount > 0 ? `Alertas, ${unreadAlertCount} não lidos` : 'Alertas'}
+            >
+              🔔{unreadAlertCount > 0 ? <span className="alert-count-badge">{unreadAlertCount}</span> : null}
+            </button>
+          ) : null}
           {accessToken ? <button className="header-logout" type="button" onClick={() => { void handleLogout(); }} disabled={isSubmitting}>Sair</button> : null}
         </div>
       </header>
@@ -1640,6 +1743,7 @@ export default function App() {
         {view === 'opportunity' ? renderOpportunity() : null}
         {view === 'simulation' ? renderSimulation() : null}
         {view === 'hub' ? renderHub() : null}
+        {view === 'alerts' ? renderAlerts() : null}
       </main>
       <footer className="site-footer"><span>Conteúdo em português · protótipo navegável</span><span>Privacidade em primeiro lugar</span></footer>
       {renderEducationModal()}

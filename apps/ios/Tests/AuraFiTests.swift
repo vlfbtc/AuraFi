@@ -229,6 +229,71 @@ final class AuraFiTests: XCTestCase {
         XCTAssertEqual(response.opportunity.dataSource.statusLabel, "Dados atualizados")
     }
 
+    func testAlertListResponseDecodesTypeStatusAndDataSource() throws {
+        let payload = Data(
+            """
+            {
+              "items": [
+                {
+                  "alert_id": "alert-1",
+                  "type": "apy_change",
+                  "opportunity_id": "pool-1",
+                  "title": "Mudança de APY observada",
+                  "message": "O APY observado desta oportunidade mudou.",
+                  "status": "unread",
+                  "created_at": "2026-08-29T12:00:00Z",
+                  "observed_at": "2026-08-29T12:00:00Z",
+                  "data_source": {
+                    "source": "defillama", "mode": "live",
+                    "observed_at": "2026-08-29T12:00:00Z", "retrieved_at": "2026-08-29T12:00:01Z",
+                    "read_only": true, "is_stale": false
+                  },
+                  "suggested_action": "simulate",
+                  "disclaimer": "Alerta educativo; não garante retorno."
+                }
+              ],
+              "pagination": {"page": 1, "page_size": 20, "total": 1, "has_next": false}
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(AlertListResponse.self, from: payload)
+
+        XCTAssertEqual(response.items.count, 1)
+        let alert = try XCTUnwrap(response.items.first)
+        XCTAssertEqual(alert.type, .apyChange)
+        XCTAssertEqual(alert.status, .unread)
+        XCTAssertEqual(alert.suggestedAction, .simulate)
+        XCTAssertEqual(alert.opportunityId, "pool-1")
+        XCTAssertEqual(alert.dataSource?.usefulSourceLabel, "DeFiLlama")
+        XCTAssertEqual(response.pagination.total, 1)
+    }
+
+    func testAlertResponseDecodesReadStatusAfterUpdate() throws {
+        let payload = Data(
+            """
+            {
+              "alert": {
+                "alert_id": "alert-1",
+                "type": "new_opportunity",
+                "title": "Nova oportunidade observada",
+                "message": "Uma oportunidade nova apareceu.",
+                "status": "read",
+                "created_at": "2026-08-29T12:00:00Z",
+                "disclaimer": "Alerta educativo; não garante retorno."
+              }
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(AlertResponse.self, from: payload)
+
+        XCTAssertEqual(response.alert.status, .read)
+        XCTAssertEqual(response.alert.type, .newOpportunity)
+        XCTAssertNil(response.alert.opportunityId)
+        XCTAssertNil(response.alert.dataSource)
+    }
+
     func testSimulationScenarioSeparatesPercentYieldFromGainAmount() throws {
         let json = Data(
             """
