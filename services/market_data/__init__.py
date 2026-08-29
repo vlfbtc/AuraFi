@@ -18,7 +18,7 @@ from .defillama import (
     UrllibHttpClient,
 )
 from .enrichment import MarketDetailEnricher
-from .presentation import decorate_opportunity, decorate_simulation
+from .presentation import decorate_opportunity, decorate_simulation, derive_risk_level
 
 __all__ = [
     "CacheEntry",
@@ -39,4 +39,5 @@ __all__ = [
     "UrllibHttpClient",
     "decorate_opportunity",
     "decorate_simulation",
+    "derive_risk_level",
 ]

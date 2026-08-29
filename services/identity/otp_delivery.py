@@ -7,6 +7,7 @@ tests can provide an in-memory fake without opening a socket.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import smtplib
@@ -17,6 +18,8 @@ from email.utils import parseaddr
 from typing import Any, Callable, Mapping, Protocol
 
 from .service import OtpDeliveryMessage, OtpDeliveryPort
+
+_logger = logging.getLogger(__name__)
 
 
 class OtpDeliveryConfigurationError(ValueError):
@@ -220,7 +223,10 @@ class SmtpOtpDelivery(OtpDeliveryPort):
                 if self.config.username is not None and self.config.password is not None:
                     client.login(self.config.username, self.config.password)
                 client.send_message(email)
-        except (OSError, smtplib.SMTPException):
+        except (OSError, smtplib.SMTPException) as exc:
+            # Logged server-side only; the client only ever sees the generic
+            # OtpDeliveryTransportError, never SMTP host/credential details.
+            _logger.error("SMTP OTP delivery failed: %s: %s", type(exc).__name__, exc)
             raise OtpDeliveryTransportError("SMTP OTP delivery failed") from None
 
 

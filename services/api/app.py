@@ -59,11 +59,25 @@ from services.identity import otp_delivery as otp_delivery_module
 from services.identity.otp_delivery import OtpDeliveryConfigurationError
 from services.identity.service import HmacOtpHasher, OtpDeliveryPort
 from services.identity.service import RequestContext
+from services.notifications.alerts import (
+    AlertEvent,
+    AlertObservation,
+    AlertPolicy,
+    AlertPreferences,
+    AlertService,
+    AlertType,
+    ApyChangeRule,
+    DataStaleRule,
+    NewOpportunityRule,
+    RiskChangeRule,
+    SuggestedAction,
+)
 from services.market_data import (
     DeFiLlamaAdapter,
     MarketDataError,
     decorate_opportunity,
     decorate_simulation,
+    derive_risk_level,
 )
 from services.recommendation import (
     Opportunity,
@@ -100,6 +114,23 @@ DISCLAIMER = (
     "de retorno e nao executam alocacoes."
 )
 SUPPORTED_CHANNELS = frozenset({"web_widget", "ios_app", "simulated"})
+# MVP defaults; no approved product policy exists yet beyond these. Adjust
+# freely (unlike the recommendation policy, alerts have no compliance gate).
+DEFAULT_ALERT_POLICY = AlertPolicy(
+    version="alert-policy-v1",
+    preferences=AlertPreferences(
+        enabled_types=frozenset({AlertType.APY_CHANGE, AlertType.RISK_CHANGE, AlertType.NEW_OPPORTUNITY}),
+        suggested_actions={
+            AlertType.APY_CHANGE: SuggestedAction.SIMULATE,
+            AlertType.RISK_CHANGE: SuggestedAction.VIEW_OPPORTUNITY,
+            AlertType.NEW_OPPORTUNITY: SuggestedAction.VIEW_OPPORTUNITY,
+        },
+    ),
+    apy_change=ApyChangeRule(threshold=2.0, threshold_kind="absolute", direction="any"),
+    risk_change=RiskChangeRule(enabled=True),
+    new_opportunity=NewOpportunityRule(enabled=True),
+    data_stale=DataStaleRule(enabled=False),
+)
 PROHIBITED_KEYS = frozenset(
     {
         "wallet",
@@ -618,6 +649,10 @@ class AuraFiApp:
         self._profiles: dict[str, RiskProfile] = {}
         self._alerts: dict[str, list[dict[str, Any]]] = {}
         self._idempotent_responses: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._alert_service = AlertService(disclaimer=DISCLAIMER)
+        self._alert_policy = DEFAULT_ALERT_POLICY
+        self._alert_market_state: dict[str, AlertObservation] = {}
+        self._alert_market_seeded = False
         dev_otp = os.environ.get("AURAFI_DEV_OTP_CODE")
         otp_generator = FixedOtpGenerator(dev_otp) if dev_otp and not self.is_production else None
 
@@ -1024,8 +1059,8 @@ class AuraFiApp:
         )
 
     def _opportunities(self, request: Request) -> Response:
-        self._resolve(request)
-        snapshot = self._read_market()
+        resolved = self._resolve(request)
+        snapshot = self._read_market(account_id=resolved.account.account_id)
         query = request.query
         asset = query.get("asset", "").casefold()
         blockchain = query.get("blockchain", "").casefold()
@@ -1063,9 +1098,9 @@ class AuraFiApp:
         )
 
     def _simulation(self, request: Request) -> Response:
-        self._resolve(request)
+        resolved = self._resolve(request)
         data = _object_body(request)
-        snapshot = self._read_market()
+        snapshot = self._read_market(account_id=resolved.account.account_id)
         opportunity_id = data.get("opportunity_id")
         opportunity = next(
             (item for item in snapshot.items if item.opportunity_id == opportunity_id), None
@@ -1092,8 +1127,8 @@ class AuraFiApp:
     def _opportunity_detail(
         self, request: Request, opportunity_id: str
     ) -> Response:
-        self._resolve(request)
-        snapshot = self._read_market(prefer_valid_cache=True)
+        resolved = self._resolve(request)
+        snapshot = self._read_market(prefer_valid_cache=True, account_id=resolved.account.account_id)
         opportunity = next(
             (
                 item
@@ -1127,7 +1162,7 @@ class AuraFiApp:
                 "intent deve ser discover, compare, explain ou next_step.",
                 details={"field": "intent"},
             )
-        snapshot = self._read_market()
+        snapshot = self._read_market(account_id=resolved.account.account_id)
         requested_ids = set(data.get("opportunity_ids") or [])
         raw_items = [item for item in snapshot.items if not requested_ids or item.opportunity_id in requested_ids]
         domain_items = tuple(
@@ -1279,7 +1314,7 @@ class AuraFiApp:
             200, {"alert": alert, "meta": self._meta(request).to_dict()}
         )
 
-    def _read_market(self, *, prefer_valid_cache: bool = False):
+    def _read_market(self, *, prefer_valid_cache: bool = False, account_id: str | None = None):
         mode = self.market_mode
         if mode not in MARKET_MODES:
             mode = "live" if self.is_production else "test"
@@ -1292,7 +1327,61 @@ class AuraFiApp:
             raise MarketDataError(
                 "Dados sintéticos não podem ser servidos em produção"
             )
+        if account_id is not None:
+            try:
+                self._evaluate_market_alerts(account_id, snapshot.items)
+            except Exception:
+                pass  # geração de alertas nunca pode derrubar a leitura de mercado
         return snapshot
+
+    def _evaluate_market_alerts(self, account_id: str, items: Any) -> None:
+        seeding = not self._alert_market_seeded
+        for item in items:
+            risk_level = item.risk_level
+            if risk_level in (None, "unknown"):
+                risk_level = derive_risk_level(item.apy_value, item.tvl_value, item.audit_status)
+            current = AlertObservation(
+                opportunity_id=item.opportunity_id,
+                data_source=item.data_source,
+                apy=item.apy_value,
+                risk_level=risk_level,
+            )
+            previous = self._alert_market_state.get(current.opportunity_id)
+            if previous is not None and current.data_source.observed_at <= previous.data_source.observed_at:
+                continue
+            if not seeding:
+                events = (
+                    [AlertEvent(AlertType.APY_CHANGE, current, previous), AlertEvent(AlertType.RISK_CHANGE, current, previous)]
+                    if previous is not None
+                    else [AlertEvent(AlertType.NEW_OPPORTUNITY, current, is_new=True, is_monitored=True)]
+                )
+                for event in events:
+                    result = self._alert_service.evaluate(account_id, event, self._alert_policy, now=utc_now())
+                    if result.generated and result.alert is not None:
+                        self._ensure_opportunity_persisted(item, risk_level)
+                        self._save_generated_alert(account_id, result.alert)
+            self._alert_market_state[current.opportunity_id] = current
+        self._alert_market_seeded = True
+
+    def _ensure_opportunity_persisted(self, item: Any, risk_level: str) -> None:
+        if self.persistence is None or self.persistence.get_opportunity(item.opportunity_id) is not None:
+            return
+        snapshot = item.to_dict()
+        # opportunities.risk_score is NOT NULL but DeFiLlama never supplies one.
+        snapshot["risk"]["level"] = risk_level
+        snapshot["risk"]["score"] = {"low": 20.0, "medium": 50.0, "high": 80.0}.get(risk_level, 50.0)
+        try:
+            self.persistence.save_opportunity_snapshot(snapshot)
+        except Exception:
+            pass  # insercao concorrente da mesma oportunidade; a linha ja existe
+
+    def _save_generated_alert(self, account_id: str, alert: Any) -> None:
+        record = {**alert.to_dict(), "account_id": account_id}
+        if self.persistence is not None:
+            self.persistence.save_alert(record)
+        else:
+            with self._lock:
+                self._alerts.setdefault(account_id, []).append(record)
 
     def _resolve(self, request: Request):
         return self.identity.resolve_session(

@@ -825,6 +825,84 @@ class ApiSmokeTests(unittest.TestCase):
         self.assertNotEqual(source["mode"], "live")
         self.assertIn("fallback", source["freshness_note"].lower())
 
+    def test_alert_generation_detects_apy_risk_and_new_opportunity_changes(self) -> None:
+        class SequencedHttpStub:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def get(self, url: str, *, timeout_seconds: float):
+                self.calls += 1
+                if self.calls == 1:
+                    data = [
+                        {
+                            "pool": "pool-1", "project": "Aave", "poolMeta": "USDC Supply",
+                            "symbol": "USDC", "chain": "Ethereum", "apy": 5.0,
+                            "tvlUsd": 2_000_000_000, "observed_at": "2026-08-29T12:00:00Z",
+                        },
+                    ]
+                else:
+                    data = [
+                        {
+                            "pool": "pool-1", "project": "Aave", "poolMeta": "USDC Supply",
+                            "symbol": "USDC", "chain": "Ethereum", "apy": 8.5,
+                            "tvlUsd": 1_000_000, "observed_at": "2026-08-29T12:05:00Z",
+                        },
+                        {
+                            "pool": "pool-2", "project": "Curve", "poolMeta": "USDT Supply",
+                            "symbol": "USDT", "chain": "Ethereum", "apy": 4.0,
+                            "tvlUsd": 500_000_000, "observed_at": "2026-08-29T12:05:00Z",
+                        },
+                    ]
+                return {"data": data}
+
+        with TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"AURAFI_DB_PATH": os.path.join(directory, "alerts.sqlite3")},
+            clear=False,
+        ):
+            app = create_app(llm=DeterministicMockLlm())
+            self.addCleanup(app.close)
+            app.market_mode = "live"
+            app.market.base_url = "https://stub.defillama.invalid"
+            app.market.endpoint = "/pools"
+            app.market.http_client = SequencedHttpStub()
+
+            requested = app.handle(
+                Request(
+                    method="POST",
+                    target="/v1/auth/otp/request",
+                    headers={},
+                    body={"email": "maria@example.com", "channel": "web_widget"},
+                )
+            )
+            otp = app.otp_sink.code_for(requested.payload["challenge_id"])
+            authenticated = app.handle(
+                Request(
+                    method="POST",
+                    target="/v1/auth/otp/verify",
+                    headers={},
+                    body={"challenge_id": requested.payload["challenge_id"], "otp": otp},
+                )
+            )
+            headers = {"Authorization": f"Bearer {authenticated.payload['session']['access_token']}"}
+
+            seeded = app.handle(Request(method="GET", target="/v1/opportunities", headers=headers))
+            self.assertEqual(seeded.status, 200)
+            after_seed = app.handle(Request(method="GET", target="/v1/alerts", headers=headers))
+            self.assertEqual(after_seed.payload["pagination"]["total"], 0)
+
+            changed = app.handle(Request(method="GET", target="/v1/opportunities", headers=headers))
+            self.assertEqual(changed.status, 200)
+            after_change = app.handle(Request(method="GET", target="/v1/alerts", headers=headers))
+            types = {item["type"] for item in after_change.payload["items"]}
+            self.assertEqual(types, {"apy_change", "risk_change", "new_opportunity"})
+            self.assertIsNotNone(app.persistence.get_opportunity("pool-1"))
+
+            unchanged = app.handle(Request(method="GET", target="/v1/opportunities", headers=headers))
+            self.assertEqual(unchanged.status, 200)
+            after_unchanged = app.handle(Request(method="GET", target="/v1/alerts", headers=headers))
+            self.assertEqual(after_unchanged.payload["pagination"]["total"], len(after_change.payload["items"]))
+
 
 class ApiHandlerEnrichmentTests(unittest.TestCase):
     """Cobre o contrato de detalhe sem depender de bind de socket no CI."""

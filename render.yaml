@@ -79,3 +79,11 @@ services:
         value: "700"
       - key: AURAFI_ANTHROPIC_TIMEOUT
         value: "20"
+
+  - type: web
+    name: aurafi-web-widget
+    runtime: static
+    rootDir: apps/web-widget
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeployTrigger: commit
