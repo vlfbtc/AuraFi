@@ -6,13 +6,51 @@ Consulte [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) para a matriz
 atualizada do que está entregue, das dependências externas e das decisões de
 produto ainda necessárias.
 
+## Ambiente publicado
+
+| Recurso | Endereço |
+| --- | --- |
+| API | https://aurafi-api.onrender.com |
+| Web Widget | https://aurafi-web-widget.onrender.com |
+
+## Banco de dados em nuvem
+
+A persistência de produção roda em **PostgreSQL gerenciado na Render** (serviço
+`aurafi-db`, infraestrutura AWS), provisionado como código pelo bloco
+`databases:` do [render.yaml](render.yaml) e acionado pela variável de ambiente
+`DATABASE_URL`, que tem prioridade sobre o SQLite local.
+
+O adapter fica em `database/postgres/repository.py` e espelha, método a método, o
+contrato do adapter local `database/local/repository.py`. As migrations estão
+versionadas em `database/migrations/001_initial_operational.sql` e
+`002_runtime_state_and_idempotency.sql`.
+
+Para verificar qual persistência está ativa em produção:
+
+```bash
+curl -s https://aurafi-api.onrender.com/health
+```
+
+O campo `checks.persistence` responde `postgres` quando `DATABASE_URL` está
+configurada e `sqlite` caso contrário.
+
+Para rodar a suíte de integração contra um PostgreSQL real:
+
+```bash
+createdb aurafi_test
+psql -d aurafi_test -f database/migrations/001_initial_operational.sql
+psql -d aurafi_test -f database/migrations/002_runtime_state_and_idempotency.sql
+AURAFI_TEST_DATABASE_URL="dbname=aurafi_test" \
+  python3.12 -m unittest tests.integration.test_postgres_repository -v
+```
+
 ## Estrutura atual
 
 - `apps/web-widget`: Web Widget atual, Vite + React + TypeScript.
 - `apps/ios`: aplicativo nativo SwiftUI para iOS 17 ou superior.
 - `services/api`: API HTTP (biblioteca padrão do Python) que orquestra os serviços de domínio.
 - `services/*`: identidade e OTP, mercado (DeFiLlama), conversa da Aura (Claude), recomendação, simulação e alertas.
-- `database`: persistência local SQLite e artefatos do DW.
+- `database`: adapters de persistência (PostgreSQL gerenciado e SQLite local), migrations e artefatos do DW.
 - `analytics`: validação da camada analítica.
 - `contracts`: contratos HTTP/OpenAPI e envelopes de mensagem.
 - `tests`: testes unitários, integração, contrato e validações.
@@ -182,10 +220,11 @@ publique por exemplo `https://api.seu-dominio.example` e use essa URL em
 `VITE_API_BASE_URL` e `AURAFI_API_BASE_URL` do iOS Release. SMTP requer domínio
 de remetente validado e SPF/DKIM/DMARC configurados no provedor.
 
-O SQLite é adequado apenas para uma única instância controlada. Escala horizontal,
-alta disponibilidade e continuidade conversacional entre réplicas ainda exigem
-um adapter PostgreSQL e cache compartilhado; não execute múltiplas réplicas com
-o volume SQLite atual.
+Em produção a persistência usa PostgreSQL gerenciado (ver "Banco de dados em
+nuvem", acima); o SQLite permanece apenas como backend de desenvolvimento e de
+testes. O limite remanescente para escala horizontal não é mais o banco, e sim o
+estado efêmero de rate limiting, hoje local ao processo: antes de subir múltiplas
+réplicas, esse estado precisa migrar para um cache compartilhado.
 
 O [render.yaml](render.yaml) provisiona esse perfil no Render com uma réplica,
 health check em `/health`, disco persistente em `/data` e geração automática do
