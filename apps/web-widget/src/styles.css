@@ -621,15 +621,24 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .loading-orb { animation: aura-pulse 1.15s ease-in-out infinite; background: var(--coral); border-radius: 50%; box-shadow: 0 0 0 8px rgba(237, 63, 152, .12); display: block; height: 12px; width: 12px; }
 @keyframes aura-pulse { 50% { box-shadow: 0 0 0 14px rgba(237, 63, 152, 0); transform: scale(.78); } }
 
-.opportunity-list { gap: 16px; }
-.opportunity-card { background: rgba(255, 255, 255, .83); border-radius: 20px; box-shadow: 0 8px 24px rgba(24, 11, 42, .035); padding: 22px 24px; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
+/* Cards tile instead of stacking full-width: at 1180px the container fits
+   three ~360px columns, which keeps each card's three metrics readable
+   without stretching them across the whole page. */
+.opportunity-list { gap: 16px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+.opportunity-card { background: rgba(255, 255, 255, .83); border-radius: 20px; box-shadow: 0 8px 24px rgba(24, 11, 42, .035); display: flex; flex-direction: column; padding: 20px 21px; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
 .opportunity-card:hover { border-color: #c09bd3; box-shadow: 0 16px 34px rgba(24, 11, 42, .085); transform: translateY(-2px); }
-.opportunity-card h3 { font-size: 26px; margin-top: 9px; }
+.opportunity-card h3 { font-size: 21px; line-height: 1.15; margin-top: 9px; overflow-wrap: anywhere; }
 .opportunity-card-head p { font-size: 12px; letter-spacing: .03em; }
+/* Pushes the source row and the action to the bottom so cards of differing
+   title heights still line their footers up across a row. */
+.opportunity-card .card-source-row { margin-top: auto; }
 .favorite-button { background: #fff; border-color: var(--line); }
-.opportunity-metrics { gap: 12px; margin-top: 23px; }
-.opportunity-metrics > div { background: #f4ecf8; border: 1px solid rgba(216, 197, 228, .7); border-radius: 13px; padding: 14px 15px; }
-.opportunity-metrics strong { color: var(--ink); font-size: 18px; }
+/* One metric per row inside the tiled card: three across left only ~100px
+   per box, which wrapped "US$ 23,8 bi" and "2,21% a.a." onto two lines. */
+.opportunity-metrics { gap: 6px; grid-template-columns: 1fr; margin-top: 18px; }
+.opportunity-metrics > div { align-items: baseline; background: #f4ecf8; border: 1px solid rgba(216, 197, 228, .7); border-radius: 11px; display: flex; gap: 14px; justify-content: space-between; padding: 10px 13px; }
+.opportunity-metrics > div > span { flex: 0 1 auto; }
+.opportunity-metrics strong { color: var(--ink); font-size: 16px; margin-top: 0; text-align: right; white-space: nowrap; }
 .card-source-row { align-items: center; border-top: 1px solid var(--line); color: var(--muted); display: flex; flex-wrap: wrap; font-family: Consolas, 'Courier New', monospace; font-size: 10px; gap: 8px 18px; justify-content: space-between; margin-top: 16px; padding-top: 13px; text-transform: uppercase; }
 .card-source-row span { align-items: center; display: inline-flex; gap: 6px; }
 .card-source-row i { background: var(--coral); border-radius: 50%; display: inline-block; height: 6px; width: 6px; }

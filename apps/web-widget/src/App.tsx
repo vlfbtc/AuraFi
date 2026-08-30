@@ -1435,9 +1435,10 @@ export default function App() {
                   {/* Source and freshness stated once each: this row used to
                       repeat "dados atualizados"/"atualizado nesta leitura" and
                       then restate the source again on the row below. */}
+                  {/* Source and freshness only; the non-custody note lives in
+                      the page footer rather than repeating on all 12 cards. */}
                   <div className={`card-source-row source-${opportunity.dataSource.mode}`}>
                     <span><i aria-hidden="true" /> {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · {opportunity.dataSource.isStale ? 'pode estar desatualizado' : 'atualizado nesta leitura'}</span>
-                    <span>sem movimentação de recursos</span>
                   </div>
                   <div className="opportunity-card-footer"><button className="text-button" type="button" onClick={() => openOpportunity(opportunity.opportunityId)}>Abrir detalhe <span aria-hidden="true">→</span></button></div>
                 </article>
