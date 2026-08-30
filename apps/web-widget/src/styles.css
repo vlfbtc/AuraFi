@@ -402,6 +402,11 @@ h2 { font-size: 25px; line-height: 1.08; }
   --mint-strong: #e3d1ee;
   --coral: #ed3f98;
   --coral-dark: #c81567;
+  /* For small uppercase monospace labels. WCAG's 4.5:1 assumes ~16px text, so
+     --muted and --coral-dark technically pass there while reading washed out
+     at 10-11px. These hold ~7:1 on the light surfaces they sit on. */
+  --muted-strong: #57485f;
+  --accent-strong: #9c104f;
   --shadow: 0 24px 70px rgba(24, 11, 42, 0.12);
 }
 
@@ -435,7 +440,9 @@ body {
 h1, h2 { color: var(--ink); font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; font-weight: 800; }
 h1 { letter-spacing: -0.055em; }
 h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63, 152, .14); outline: none; }
-.eyebrow, .card-kicker, .profile-label { color: var(--coral-dark); font-weight: 800; letter-spacing: 0.12em; }
+/* Kept ahead of the dark-card overrides below, which repaint these in a light
+   pink and already measure above 7:1. */
+.eyebrow, .card-kicker, .profile-label { color: var(--accent-strong); font-size: 11.5px; font-weight: 800; letter-spacing: 0.1em; }
 .lead { color: #564765; }
 
 /* --coral under white text is only 3.6:1, below the 4.5:1 this size needs.
@@ -557,9 +564,9 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .source-indicator.source-live { background: #17a66d; box-shadow: 0 0 0 5px rgba(23, 166, 109, .13); }
 .source-indicator.source-cache { background: #d39b2e; box-shadow: 0 0 0 5px rgba(211, 155, 46, .13); }
 .source-indicator.source-test, .source-indicator.source-fallback { background: var(--coral); }
-.source-pill, .read-only-pill { border: 1px solid currentColor; border-radius: 999px; color: var(--muted); font-family: Consolas, 'Courier New', monospace; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 6px 9px; text-transform: uppercase; white-space: nowrap; }
-.source-pill.live { color: #137a53; }
-.source-pill.cache { color: #9a6a12; }
+.source-pill, .read-only-pill { border: 1px solid currentColor; border-radius: 999px; color: var(--muted-strong); font-family: Consolas, 'Courier New', monospace; font-size: 11px; font-weight: 700; letter-spacing: .05em; padding: 6px 10px; text-transform: uppercase; white-space: nowrap; }
+.source-pill.live { color: #0e5c3e; }
+.source-pill.cache { color: #74500b; }
 .source-pill.test, .source-pill.fallback { color: var(--coral-dark); }
 .source-pill span { font-size: 8px; }
 .read-only-pill { background: var(--ink); border-color: var(--ink); color: #fff; }
@@ -593,10 +600,10 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .overview-profile-card > strong, .overview-safety-card > strong { color: var(--ink); }
 .overview-foot { align-items: flex-end; border-top: 1px solid rgba(216, 197, 228, .9); display: flex; gap: 12px; justify-content: space-between; margin-top: 22px; padding-top: 12px; }
 .overview-market-card .overview-foot { border-color: rgba(255, 255, 255, .16); }
-.overview-foot span, .overview-foot strong { font-family: Consolas, 'Courier New', monospace; font-size: 10px; line-height: 1.3; text-transform: uppercase; }
-.overview-foot span { color: var(--muted); }
+.overview-foot span, .overview-foot strong { font-family: Consolas, 'Courier New', monospace; font-size: 11px; font-weight: 600; line-height: 1.3; text-transform: uppercase; }
+.overview-foot span { color: var(--muted-strong); }
 .overview-market-card .overview-foot span { color: #bfa8cc; }
-.overview-foot strong { color: var(--coral-dark); text-align: right; }
+.overview-foot strong { color: var(--accent-strong); text-align: right; }
 .overview-market-card .overview-foot strong { color: #ef7fba; }
 .overview-icon, .profile-initial { align-items: center; background: var(--coral-dark); border-radius: 50%; color: #fff; display: inline-flex; font-size: 15px; height: 32px; justify-content: center; width: 32px; }
 .profile-initial { background: var(--ink); font-weight: 800; }
@@ -639,7 +646,12 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .opportunity-metrics > div { align-items: baseline; background: #f4ecf8; border: 1px solid rgba(216, 197, 228, .7); border-radius: 11px; display: flex; gap: 14px; justify-content: space-between; padding: 10px 13px; }
 .opportunity-metrics > div > span { flex: 0 1 auto; }
 .opportunity-metrics strong { color: var(--ink); font-size: 16px; margin-top: 0; text-align: right; white-space: nowrap; }
-.card-source-row { align-items: center; border-top: 1px solid var(--line); color: var(--muted); display: flex; flex-wrap: wrap; font-family: Consolas, 'Courier New', monospace; font-size: 10px; gap: 8px 18px; justify-content: space-between; margin-top: 16px; padding-top: 13px; text-transform: uppercase; }
+/* The label was 10px/400 in --muted: 5.2:1, which passes the 16px-calibrated
+   bar but not the eye at this size. */
+.opportunity-metrics span, .detail-metrics span, .detail-metrics small { color: var(--muted-strong); font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.opportunity-category { color: var(--accent-strong); font-size: 11px; font-weight: 600; }
+.list-count { color: var(--muted-strong); font-size: 11px; font-weight: 600; }
+.card-source-row { align-items: center; border-top: 1px solid var(--line); color: var(--muted-strong); display: flex; flex-wrap: wrap; font-family: Consolas, 'Courier New', monospace; font-size: 11px; font-weight: 600; gap: 8px 18px; justify-content: space-between; letter-spacing: .03em; margin-top: 16px; padding-top: 13px; text-transform: uppercase; }
 .card-source-row span { align-items: center; display: inline-flex; gap: 6px; }
 .card-source-row i { background: var(--coral); border-radius: 50%; display: inline-block; height: 6px; width: 6px; }
 .card-source-row.source-live i { background: #17a66d; }
