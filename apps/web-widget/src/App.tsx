@@ -340,6 +340,16 @@ function messageText(message: MessageEnvelope): string {
   return typeof message.payload.text === 'string' ? message.payload.text : 'Mensagem sem conteúdo textual.';
 }
 
+/** The model emits **bold** markdown; render it as elements so the literal
+ *  asterisks stop showing up in the bubbles. Parsed into React nodes rather
+ *  than injected as HTML, so model output is never treated as markup. */
+function renderMessageText(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => (part.startsWith('**') && part.endsWith('**') && part.length > 4
+    ? <strong key={index}>{part.slice(2, -2)}</strong>
+    : <React.Fragment key={index}>{part}</React.Fragment>));
+}
+
 function readLocalArray<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -554,6 +564,7 @@ export default function App() {
   const educationCloseRef = useRef<HTMLButtonElement>(null);
   const educationModalRef = useRef<HTMLElement>(null);
   const educationTriggerRef = useRef<HTMLElement | null>(null);
+  const conversationLogRef = useRef<HTMLDivElement>(null);
   const apiClient = useMemo(
     () => accessToken ? createWidgetApi({ token: accessToken }) : widgetApi,
     [accessToken],
@@ -588,6 +599,13 @@ export default function App() {
   useEffect(() => {
     headingRef.current?.focus();
   }, [view, currentQuestionIndex]);
+
+  // Keep the newest message in view, including the "Aura está organizando"
+  // indicator while the reply is in flight.
+  useEffect(() => {
+    const log = conversationLogRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [conversation?.messages.length, conversationState]);
 
   useEffect(() => {
     writeLocalArray(SAVED_PLANS_KEY, savedPlans);
@@ -1112,6 +1130,22 @@ export default function App() {
     event.preventDefault();
     const text = conversationDraft.trim();
     if (!text || !conversation) return;
+    // Show the message straight away and clear the box. The model round trip
+    // runs about ten seconds; without this the composer just sat there full
+    // and the sent message was invisible until the reply landed.
+    const pendingId = `pending_${crypto.randomUUID()}`;
+    const pending: MessageEnvelope = {
+      envelopeVersion: '1.0',
+      messageId: pendingId,
+      messageType: 'user_message',
+      occurredAt: new Date().toISOString(),
+      requestId: pendingId,
+      correlationId: conversation.messages.at(-1)?.correlationId ?? pendingId,
+      payload: { text },
+      disclaimer: '',
+    };
+    setConversation((current) => (current ? { ...current, messages: [...current.messages, pending] } : current));
+    setConversationDraft('');
     setConversationState('loading');
     setConversationError(null);
     try {
@@ -1127,16 +1161,21 @@ export default function App() {
       }, conversation.messages.at(-1)?.correlationId
         ? { correlationId: conversation.messages.at(-1)!.correlationId }
         : {});
+      // The server echoes the user message back, so drop the placeholder
+      // rather than showing the question twice.
       setConversation((current) => current ? {
         ...current,
         status: result.data.status,
-        messages: [...current.messages, ...result.data.messages],
+        messages: [...current.messages.filter((m) => m.messageId !== pendingId), ...result.data.messages],
       } : result.data);
-      setConversationDraft('');
       setConversationState('ready');
     } catch {
+      setConversation((current) => (current
+        ? { ...current, messages: current.messages.filter((m) => m.messageId !== pendingId) }
+        : current));
+      setConversationDraft(text);
       setConversationState('error');
-      setConversationError('Não consegui responder agora. Sua mensagem não foi perdida; tente enviar novamente.');
+      setConversationError('Não consegui responder agora. Sua mensagem voltou para a caixa de texto; tente enviar novamente.');
     }
   };
 
@@ -1573,17 +1612,17 @@ export default function App() {
 
       {conversationError ? <InlineAlert message={conversationError} onRetry={() => { setConversation(null); void openHub(); }} /> : null}
 
-      <div className="conversation-log" role="log" aria-live="polite" aria-relevant="additions text">
+      <div className="conversation-log" ref={conversationLogRef} role="log" aria-live="polite" aria-relevant="additions text">
         {!conversation || conversation.messages.length === 0 ? (
           <div className="hub-empty">
             <span className="aura-avatar" aria-hidden="true">A</span>
             <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, os riscos informados e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
           </div>
         ) : conversation.messages.map((message) => (
-          <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}`} key={message.messageId}>
+          <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}${message.messageId.startsWith('pending_') ? ' is-pending' : ''}`} key={message.messageId}>
             <span className="message-author">{message.messageType === 'user_message' ? 'Você' : 'Aura'}</span>
-            <p>{messageText(message)}</p>
-            <time dateTime={message.occurredAt}>{formatDateTime(message.occurredAt)}</time>
+            <p>{renderMessageText(messageText(message))}</p>
+            <time dateTime={message.occurredAt}>{message.messageId.startsWith('pending_') ? 'enviando…' : formatDateTime(message.occurredAt)}</time>
           </article>
         ))}
         {conversationState === 'loading' ? <div className="chat-thinking" role="status"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /> <em>Aura está organizando a resposta…</em></div> : null}
@@ -1592,7 +1631,22 @@ export default function App() {
       {conversation ? (
         <form className="hub-composer" onSubmit={sendHubMessage}>
           <label className="sr-only" htmlFor="hub-message">Mensagem para a Aura</label>
-          <textarea id="hub-message" rows={2} maxLength={2000} value={conversationDraft} onChange={(event) => setConversationDraft(event.target.value)} placeholder="Pergunte sobre APY, risco ou uma oportunidade…" disabled={conversationState === 'loading'} />
+          <textarea
+            id="hub-message"
+            rows={2}
+            maxLength={2000}
+            value={conversationDraft}
+            onChange={(event) => setConversationDraft(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter breaks the line, as in any chat.
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Pergunte sobre APY, risco ou uma oportunidade…"
+            disabled={conversationState === 'loading'}
+          />
           <button className="primary-button" type="submit" disabled={conversationState === 'loading' || !conversationDraft.trim()}>Enviar <span aria-hidden="true">→</span></button>
         </form>
       ) : conversationState !== 'loading' ? <button className="primary-button" type="button" onClick={() => { void openHub(); }}>Iniciar nova conversa</button> : null}

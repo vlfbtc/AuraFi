@@ -350,17 +350,23 @@ h2 { font-size: 25px; line-height: 1.08; }
 .hub-status strong, .hub-status span { display: block; }
 .hub-status strong { font-size: 13px; }
 .hub-status span { color: #695274; font-size: 12px; margin-top: 3px; }
-.conversation-log { background: linear-gradient(180deg, #fbf7fe, #fffdf9); border: 1px solid #e3d7eb; border-radius: 24px; display: flex; flex-direction: column; gap: 13px; min-height: 360px; padding: clamp(18px, 4vw, 30px); }
+/* Scrolls like a chat log instead of growing the page: the newest message
+   stays at the bottom edge, next to the composer. */
+.conversation-log { background: linear-gradient(180deg, #fbf7fe, #fffdf9); border: 1px solid #e3d7eb; border-radius: 24px; display: flex; flex-direction: column; gap: 13px; height: min(52vh, 460px); overflow-y: auto; padding: clamp(18px, 4vw, 26px); scroll-behavior: smooth; }
 .hub-empty { align-items: flex-start; display: flex; gap: 14px; margin: auto; max-width: 540px; }
 .hub-empty strong { color: #281039; display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 25px; }
 .hub-empty p { color: #695274; line-height: 1.55; margin: 8px 0 0; }
 .aura-avatar { align-items: center; background: #d51c73; border-radius: 50%; color: #fff; display: flex; flex: 0 0 auto; font-weight: 800; height: 45px; justify-content: center; width: 45px; }
-.chat-message { border-radius: 18px; max-width: min(680px, 88%); padding: 14px 16px; }
-.chat-message.from-user { align-self: flex-end; background: #281039; color: #fff; }
-.chat-message.from-aura { align-self: flex-start; background: #f0e1f7; color: #281039; }
-.message-author { display: block; font-size: 11px; font-weight: 800; letter-spacing: .05em; opacity: .72; text-transform: uppercase; }
-.chat-message p { line-height: 1.55; margin: 7px 0; white-space: pre-wrap; }
-.chat-message time { display: block; font-size: 10px; opacity: .68; }
+/* Asymmetric corners give each bubble a tail on its own side, which is what
+   makes a stack of messages read as a conversation. */
+.chat-message { border-radius: 18px; max-width: min(560px, 82%); padding: 12px 16px 10px; }
+.chat-message.from-user { align-self: flex-end; background: #281039; border-bottom-right-radius: 6px; color: #fff; }
+.chat-message.from-aura { align-self: flex-start; background: #f4e7fa; border: 1px solid #e2cdee; border-bottom-left-radius: 6px; color: #281039; }
+.message-author { display: block; font-size: 11px; font-weight: 800; letter-spacing: .05em; opacity: .8; text-transform: uppercase; }
+.chat-message p { line-height: 1.55; margin: 6px 0 4px; white-space: pre-wrap; }
+.chat-message time { display: block; font-size: 11px; opacity: .72; text-align: right; }
+/* The optimistic bubble, until the server echoes it back. */
+.chat-message.is-pending { opacity: .72; }
 .chat-thinking { align-items: center; color: #695274; display: flex; font-size: 12px; gap: 5px; }
 .chat-thinking span { animation: hub-pulse 1s infinite alternate; background: #d51c73; border-radius: 50%; height: 6px; width: 6px; }
 .chat-thinking span:nth-child(2) { animation-delay: .18s; }
@@ -498,7 +504,7 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 
 .header-alerts-button { background: transparent; border: 1px solid var(--line); border-radius: 999px; font-size: 16px; line-height: 1; min-height: 44px; min-width: 44px; padding: 8px 12px; position: relative; }
 .header-alerts-button:hover { border-color: var(--coral); }
-.alert-count-badge { background: var(--coral); border-radius: 999px; color: #fff; font-family: Consolas, 'Courier New', monospace; font-size: 10px; font-weight: 700; min-width: 16px; padding: 1px 4px; position: absolute; right: -4px; text-align: center; top: -4px; }
+.alert-count-badge { background: var(--coral-dark); border-radius: 999px; color: #fff; font-family: Consolas, 'Courier New', monospace; font-size: 10px; font-weight: 700; min-width: 17px; padding: 1px 4px; position: absolute; right: -4px; text-align: center; top: -4px; }
 .alert-badge { border-radius: 999px; display: inline-block; font-family: Consolas, 'Courier New', monospace; font-size: 10px; padding: 6px 9px; text-transform: uppercase; }
 .alert-badge.unread { background: #fff0f7; color: var(--coral-dark); }
 .alert-badge.read { background: var(--mint); color: var(--muted); }

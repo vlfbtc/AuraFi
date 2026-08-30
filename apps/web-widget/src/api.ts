@@ -468,9 +468,22 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
     ? (requestedMode ?? (baseUrl ? 'api-with-fixture-fallback' : 'fixture'))
     : 'api';
   const fetcher = options.fetcher ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? 8000;
+
+  // A single 8s budget aborted the Aura reply mid-flight: the model call takes
+  // ~10s end to end, so the server answered 201 while the browser had already
+  // given up and shown "não consegui responder agora". Budget per endpoint by
+  // what it actually waits on.
+  const timeoutFor = (method: string, path: string): number => {
+    if (options.timeoutMs !== undefined) return options.timeoutMs;
+    if (path.includes('/messages')) return 45_000;        // model round trip
+    if (path.startsWith('/v1/conversations')) return 30_000; // may carry an initial message
+    if (path.startsWith('/v1/simulations')) return 20_000;
+    if (path.startsWith('/v1/opportunities')) return 20_000; // live DeFiLlama read
+    return 12_000;
+  };
 
   const request = async <T>(method: string, path: string, context: RequestContext, body?: unknown, parse?: (value: unknown, response: Response, requested: RequestContext) => T): Promise<ApiResult<T>> => {
+    const timeoutMs = timeoutFor(method, path);
     const requestId = context.requestId ?? `req_${crypto.randomUUID()}`;
     const correlationId = context.correlationId ?? `corr_${crypto.randomUUID()}`;
     const operation = `${method} ${path}`;
