@@ -198,9 +198,7 @@ h2 { font-size: 25px; line-height: 1.08; }
 .opportunity-metrics > div, .detail-metrics > div { background: #f3f7f4; border-radius: 12px; padding: 13px; }
 .opportunity-metrics span, .detail-metrics span, .detail-metrics small { color: var(--muted); display: block; font-family: Consolas, 'Courier New', monospace; font-size: 10px; letter-spacing: .02em; text-transform: uppercase; }
 .opportunity-metrics strong, .detail-metrics strong { display: block; font-size: 17px; line-height: 1.25; margin-top: 8px; }
-.opportunity-card-meta { border-top: 1px solid var(--line); color: var(--muted); display: flex; flex-wrap: wrap; font-family: Consolas, 'Courier New', monospace; font-size: 10px; gap: 8px 18px; margin-top: 16px; padding-top: 12px; }
 .opportunity-card-footer { align-items: center; display: flex; justify-content: space-between; margin-top: 14px; }
-.stale-label { color: #9b6a26; font-family: Consolas, 'Courier New', monospace; font-size: 10px; text-transform: uppercase; }
 .opportunity-detail > .back-button { margin-bottom: 28px; }
 .detail-heading { align-items: center; }
 .detail-heading h1 { margin-bottom: 12px; }
@@ -424,6 +422,13 @@ body {
 .brand-button { color: #fff; letter-spacing: -0.02em; }
 .brand-mark span { background: var(--coral); }
 .header-caption, .site-footer { color: #cdbddd; }
+
+/* The header sits on --ink, so anything inside it needs a light foreground.
+   --muted (#6d5d78) only reaches 3.1:1 there and the bell glyph was rendering
+   near-black at 1.1:1. */
+.header-logout, .header-alerts-button { border-color: rgba(255, 255, 255, 0.28); color: #e7dcf0; }
+.header-logout:hover, .header-alerts-button:hover { background: rgba(255, 255, 255, 0.08); border-color: #f5a8cf; color: #fff; }
+.header-alerts-button svg { display: block; height: 19px; width: 19px; }
 .main-content { padding-top: clamp(38px, 6vw, 76px); }
 .main-content.view-welcome { background: transparent; }
 
@@ -433,8 +438,10 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .eyebrow, .card-kicker, .profile-label { color: var(--coral-dark); font-weight: 800; letter-spacing: 0.12em; }
 .lead { color: #564765; }
 
-.primary-button { background: var(--coral); box-shadow: 0 10px 24px rgba(200, 21, 103, 0.23); }
-.primary-button:hover { background: #d92b82; box-shadow: 0 14px 28px rgba(200, 21, 103, 0.3); }
+/* --coral under white text is only 3.6:1, below the 4.5:1 this size needs.
+   --coral-dark reaches 5.6:1 and keeps the brand hue. */
+.primary-button { background: var(--coral-dark); box-shadow: 0 10px 24px rgba(200, 21, 103, 0.23); }
+.primary-button:hover { background: #a81157; box-shadow: 0 14px 28px rgba(200, 21, 103, 0.3); }
 .secondary-button { background: var(--mint); color: var(--ink); }
 .secondary-button:hover { background: var(--mint-strong); }
 .quiet-note { color: var(--muted); }
@@ -469,7 +476,7 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .summary-card { border-color: var(--line); }
 .summary-card p, .summary-footnote { color: #675673; }
 .opportunity-card { border-radius: 16px; }
-.opportunity-category, .stale-label, .scenario-horizon { color: var(--coral-dark); }
+.opportunity-category, .scenario-horizon { color: var(--coral-dark); }
 .opportunity-metrics > div, .detail-metrics > div, .risk-callout, .result-dashboard-cta, .simulation-source, .simulation-empty, .history-empty { background: #f4ecf8; }
 .favorite-button:hover, .favorite-button.is-favorite { border-color: var(--coral); color: var(--coral-dark); }
 .detail-metrics strong, .summary-value { color: var(--ink); }
@@ -545,9 +552,11 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .livebar-main strong { color: var(--ink); font-size: 13px; letter-spacing: .01em; }
 .livebar-main div > span { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .source-indicator { background: var(--coral); border-radius: 50%; box-shadow: 0 0 0 5px rgba(237, 63, 152, .12); display: block; height: 10px; width: 10px; }
-.source-live { background: #17a66d; box-shadow: 0 0 0 5px rgba(23, 166, 109, .13); }
-.source-cache { background: #d39b2e; box-shadow: 0 0 0 5px rgba(211, 155, 46, .13); }
-.source-test, .source-fallback { background: var(--coral); }
+/* Scoped to the indicator dot on purpose: a bare .source-live also matches
+   .card-source-row.source-live and used to paint the whole row solid green. */
+.source-indicator.source-live { background: #17a66d; box-shadow: 0 0 0 5px rgba(23, 166, 109, .13); }
+.source-indicator.source-cache { background: #d39b2e; box-shadow: 0 0 0 5px rgba(211, 155, 46, .13); }
+.source-indicator.source-test, .source-indicator.source-fallback { background: var(--coral); }
 .source-pill, .read-only-pill { border: 1px solid currentColor; border-radius: 999px; color: var(--muted); font-family: Consolas, 'Courier New', monospace; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 6px 9px; text-transform: uppercase; white-space: nowrap; }
 .source-pill.live { color: #137a53; }
 .source-pill.cache { color: #9a6a12; }
@@ -589,7 +598,7 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .overview-market-card .overview-foot span { color: #bfa8cc; }
 .overview-foot strong { color: var(--coral-dark); text-align: right; }
 .overview-market-card .overview-foot strong { color: #ef7fba; }
-.overview-icon, .profile-initial { align-items: center; background: var(--coral); border-radius: 50%; color: #fff; display: inline-flex; font-size: 15px; height: 32px; justify-content: center; width: 32px; }
+.overview-icon, .profile-initial { align-items: center; background: var(--coral-dark); border-radius: 50%; color: #fff; display: inline-flex; font-size: 15px; height: 32px; justify-content: center; width: 32px; }
 .profile-initial { background: var(--ink); font-weight: 800; }
 
 .dashboard-panel > .synthetic-banner, .dashboard-panel > .dashboard-summary { display: none; }
@@ -626,9 +635,7 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
 .card-source-row i { background: var(--coral); border-radius: 50%; display: inline-block; height: 6px; width: 6px; }
 .card-source-row.source-live i { background: #17a66d; }
 .card-source-row.source-cache i { background: #d39b2e; }
-.opportunity-card-meta, .opportunity-card-footer .stale-label { display: none; }
-.opportunity-card-footer { margin-top: 15px; }
-.data-state-note { color: var(--muted); font-family: Consolas, 'Courier New', monospace; font-size: 10px; text-transform: uppercase; }
+.opportunity-card-footer { display: flex; justify-content: flex-end; margin-top: 13px; }
 .opportunity-card-footer .text-button { color: var(--coral-dark); }
 
 .detail-source-banner { align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 15px; display: flex; gap: 14px; margin: 18px 0 24px; padding: 14px 16px; }
@@ -665,5 +672,4 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
   .opportunity-card h3 { font-size: 22px; }
   .opportunity-metrics { grid-template-columns: 1fr; }
   .card-source-row { align-items: flex-start; flex-direction: column; gap: 7px; }
-  .data-state-note { display: none; }
 }

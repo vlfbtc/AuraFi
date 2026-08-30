@@ -71,3 +71,6 @@ ENV/
 *.swp
 *.swo
 .DS_Store
+
+# Local editor/agent tooling
+.claude/

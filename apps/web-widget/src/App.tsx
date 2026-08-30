@@ -1432,12 +1432,14 @@ export default function App() {
                     <div><span>TVL observado</span><strong>{opportunity.tvl.displayCompact ?? `${opportunity.tvl.currency} ${opportunity.tvl.value.toLocaleString('pt-BR')}`}</strong></div>
                     <div><span>Risco informado</span><strong>{riskLabel(opportunity.risk.level)}</strong></div>
                   </div>
+                  {/* Source and freshness stated once each: this row used to
+                      repeat "dados atualizados"/"atualizado nesta leitura" and
+                      then restate the source again on the row below. */}
                   <div className={`card-source-row source-${opportunity.dataSource.mode}`}>
-                    <span><i aria-hidden="true" /> {opportunity.dataSource.statusLabel ?? dataModeLabel(opportunity.dataSource.mode)} · {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · informativo</span>
-                    <span>{opportunity.dataSource.isStale ? 'Pode estar desatualizado' : 'Atualizado nesta leitura'}</span>
+                    <span><i aria-hidden="true" /> {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · {opportunity.dataSource.isStale ? 'pode estar desatualizado' : 'atualizado nesta leitura'}</span>
+                    <span>sem movimentação de recursos</span>
                   </div>
-                  <div className="opportunity-card-meta"><span>Fonte: {opportunity.dataSource.sourceLabel ?? 'DeFiLlama'} · {(opportunity.dataSource.statusLabel ?? dataModeLabel(opportunity.dataSource.mode)).toLowerCase()}</span><span>Observado: {formatDateTime(opportunity.dataSource.observedAt)} · {opportunity.dataSource.isStale ? 'atualização pendente' : 'leitura atual'}</span></div>
-                  <div className="opportunity-card-footer"><span className="stale-label">{opportunity.dataSource.isStale ? '⚠ Pode estar desatualizada' : '✓ Leitura atual'}</span><span className="data-state-note">Fonte observada · sem movimentação de recursos</span><button className="text-button" type="button" onClick={() => openOpportunity(opportunity.opportunityId)}>Abrir detalhe <span aria-hidden="true">→</span></button></div>
+                  <div className="opportunity-card-footer"><button className="text-button" type="button" onClick={() => openOpportunity(opportunity.opportunityId)}>Abrir detalhe <span aria-hidden="true">→</span></button></div>
                 </article>
               );
             })}
@@ -1724,7 +1726,13 @@ export default function App() {
               onClick={() => setView('alerts')}
               aria-label={unreadAlertCount > 0 ? `Alertas, ${unreadAlertCount} não lidos` : 'Alertas'}
             >
-              🔔{unreadAlertCount > 0 ? <span className="alert-count-badge">{unreadAlertCount}</span> : null}
+              {/* Inline SVG rather than the 🔔 emoji: colour emoji ignore `color`
+                  and rendered near-black on the dark header. */}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+              </svg>
+              {unreadAlertCount > 0 ? <span className="alert-count-badge">{unreadAlertCount}</span> : null}
             </button>
           ) : null}
           {accessToken ? <button className="header-logout" type="button" onClick={() => { void handleLogout(); }} disabled={isSubmitting}>Sair</button> : null}
@@ -1745,7 +1753,7 @@ export default function App() {
         {view === 'hub' ? renderHub() : null}
         {view === 'alerts' ? renderAlerts() : null}
       </main>
-      <footer className="site-footer"><span>Conteúdo em português · protótipo navegável</span><span>Privacidade em primeiro lugar</span></footer>
+      <footer className="site-footer"><span>Dados de mercado da DeFiLlama · conteúdo informativo</span><span>Sem custódia · sem execução de ordens</span></footer>
       {renderEducationModal()}
     </div>
   );
