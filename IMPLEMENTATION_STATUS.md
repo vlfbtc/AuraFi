@@ -65,13 +65,16 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
   depois de confirmar um código novo enviado ao e-mail da própria conta. A
   migration `003_account_erasure.sql` permite apagar o perfil de risco apenas
   dentro dessa transação; fora dela, o perfil continua somente de inclusão.
-- Com cadastro aberto, a conta só é criada depois que o código é confirmado;
-  e-mails digitados e nunca confirmados deixam de ser gravados.
+- Com cadastro aberto, a conta só é criada depois que o código é confirmado.
+  Um e-mail digitado e nunca confirmado não vira conta: fica só no pedido de
+  código, que a rotina de retenção apaga 24 h depois de vencer.
 - Eventos de segurança e de privacidade (pedidos de código, logins, falhas,
   bloqueios, limites de uso, origens recusadas, erros internos, consentimento,
   mudança de memória, exportação e exclusão) saem no log do processo como uma
   linha JSON por evento (`services/api/security_log.py`), sem código, token,
-  e-mail em claro ou texto de conversa.
+  e-mail em claro ou texto de conversa. Para investigar incidentes, o registro
+  guarda o IP de origem, a rota, o identificador da requisição e, quando há,
+  os identificadores internos da conta e da sessão.
 - Retenção (`database/account_data.py`): no máximo uma vez por hora, remove
   códigos vencidos há mais de 24 h, respostas de idempotência com mais de 24 h
   e contas nunca confirmadas há mais de 7 dias. Em produção, só roda com

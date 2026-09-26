@@ -213,7 +213,10 @@ códigos vencidos, respostas antigas de idempotência e contas nunca confirmadas
 (fora de produção ela já vem ligada; `off` desliga).
 
 O processo da API grava eventos de segurança e de privacidade no log, uma linha
-JSON por evento (`services/api/security_log.py`), sem dados pessoais em claro.
+JSON por evento (`services/api/security_log.py`). Nunca entram código, token,
+e-mail em claro ou texto de conversa; entram o IP de origem, a rota, o
+identificador da requisição e, quando há, os identificadores internos da conta
+e da sessão, que servem para investigar incidentes.
 
 Exemplo de build, sem incorporar `.env` ou segredos na imagem:
 
