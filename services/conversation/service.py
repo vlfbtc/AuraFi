@@ -815,8 +815,12 @@ class ConversationService:
                 channel_identity_id=channel_identity_id,
             )
             self._authorize(conversation, resolved)
-            _require_same_consent(conversation.consent, message_request.consent)
+            _require_compatible_consent(conversation.consent, message_request.consent)
             _require_consent(message_request.consent)
+            if conversation.consent.memory != message_request.consent.memory:
+                # A memória é opcional: o titular pode ligá-la ou desligá-la a
+                # qualquer momento, e a escolha vale para as próximas mensagens.
+                conversation = replace(conversation, consent=message_request.consent)
             if message_request.external_message_id:
                 replay = self._idempotent_replay(conversation, message_request.external_message_id, resolved.meta)
                 if replay is not None:
@@ -900,7 +904,7 @@ class ConversationService:
                 correlation_id=correlation_id or conversation.correlation_id,
             )
             self._authorize(conversation, resolved)
-            _require_same_consent(conversation.consent, request.consent)
+            _require_compatible_consent(conversation.consent, request.consent)
             _require_consent(request.consent)
             return self._idempotent_replay(
                 conversation,
@@ -1547,10 +1551,10 @@ def _require_consent(consent: Consent) -> None:
         raise ConversationConsentError()
 
 
-def _require_same_consent(authoritative: Consent, presented: Consent) -> None:
-    """Impede que o payload da mensagem altere a decisão persistida da conversa."""
+def _require_compatible_consent(authoritative: Consent, presented: Consent) -> None:
+    """Impede que a mensagem altere a decisão persistida, exceto a memória, que é opcional e revogável."""
 
-    if not _same_consent(authoritative, presented):
+    if not _same_consent(replace(authoritative, memory=presented.memory), presented):
         raise ConversationConsentError()
 
 

@@ -146,6 +146,23 @@ class AccountPrivacyTests(unittest.TestCase):
         self.assertEqual(refused.status, 401)
         self.assertIsNotNone(self.app.persistence.find_account_by_email("alvo@example.com"))
 
+    def test_memoria_pode_ser_ligada_e_desligada_na_mesma_conversa(self) -> None:
+        token = self.login("memoria@example.com")
+        created = self.call("POST", "/v1/conversations", {"channel": "web_widget", "consent": CONSENT}, token)
+        path = f"/v1/conversations/{created.payload['conversation']['conversation_id']}/messages"
+
+        def send(**consent_changes):
+            body = {"text": "Oi", "channel": "web_widget", "consent": {**CONSENT, **consent_changes}}
+            return self.call("POST", path, body, token).status
+
+        # A classe limita a Aura a três mensagens por hora por conta.
+        with self.assertLogs("aurafi.security", level="INFO") as captured:
+            self.assertEqual(send(memory=True), 201)
+            self.assertEqual(send(memory=False), 201)
+        self.assertEqual(send(policy_version="outra-versao", memory=False), 422)
+        changes = [line for line in captured.output if "privacy.memory_consent_changed" in line]
+        self.assertEqual(len(changes), 2)
+
     def test_sessao_invalida_nao_revela_se_a_conversa_existe(self) -> None:
         token = self.login("existe@example.com")
         created = self.call("POST", "/v1/conversations", {"channel": "web_widget", "consent": CONSENT}, token)

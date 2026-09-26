@@ -1368,9 +1368,9 @@ class AuraFiApp:
         self._check_llm_limit(request)
         data = _object_body(request)
         message = MessageRequest.from_mapping(data, default_channel=data.get("channel"))
+        conversation_record = self.conversation._repository.get(conversation_id)
         correlation_id = request.provided_correlation_id
         if correlation_id is None:
-            conversation_record = self.conversation._repository.get(conversation_id)
             correlation_id = conversation_record.correlation_id if conversation_record else None
         if message.channel == "simulated":
             transport = {
@@ -1392,6 +1392,13 @@ class AuraFiApp:
                 message,
                 request_id=request.request_id,
                 correlation_id=correlation_id,
+            )
+        if conversation_record is not None and conversation_record.consent.memory != message.consent.memory:
+            security_log.emit(
+                "privacy.memory_consent_changed",
+                request_id=request.request_id,
+                memory=message.consent.memory,
+                policy_version=message.consent.policy_version,
             )
         return Response(201, result.to_dict())
 
