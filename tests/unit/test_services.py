@@ -129,30 +129,109 @@ def make_identity(clock: MutableClock | None = None) -> tuple[IdentityService, M
     return service, clock, sink
 
 
+def make_self_signup_identity(
+    *otps: str, events: list[tuple[str, dict]] | None = None
+) -> tuple[IdentityService, InMemoryAccountRepository, InMemoryOtpSink]:
+    sink = InMemoryOtpSink(capture_secrets=True)
+    accounts = InMemoryAccountRepository()
+    service = IdentityService(
+        accounts=accounts,
+        challenges=InMemoryOtpChallengeRepository(),
+        sessions=InMemorySessionRepository(),
+        channel_identities=InMemoryChannelIdentityRepository(),
+        otp_delivery=sink,
+        otp_generator=SequenceGenerator(*(otps or ("123456",))),
+        otp_hasher=HmacOtpHasher(b"self-signup-test-pepper"),
+        token_generator=SequenceGenerator("tok-acesso-1", "tok-renovacao-1", "tok-acesso-2", "tok-renovacao-2"),
+        id_generator=IdFactory(),
+        allow_self_signup=True,
+        event_sink=(lambda name, fields: events.append((name, dict(fields)))) if events is not None else None,
+    )
+    return service, accounts, sink
+
+
 class IdentityDomainTests(unittest.TestCase):
-    def test_self_signup_opt_in_creates_account_and_delivers_otp(self) -> None:
-        sink = InMemoryOtpSink(capture_secrets=True)
-        accounts = InMemoryAccountRepository()
-        service = IdentityService(
-            accounts=accounts,
-            challenges=InMemoryOtpChallengeRepository(),
-            sessions=InMemorySessionRepository(),
-            channel_identities=InMemoryChannelIdentityRepository(),
-            otp_delivery=sink,
-            otp_generator=SequenceGenerator("123456"),
-            otp_hasher=HmacOtpHasher(b"self-signup-test-pepper"),
-            token_generator=SequenceGenerator("access", "refresh"),
-            id_generator=IdFactory(),
-            allow_self_signup=True,
-        )
+    def test_self_signup_cria_conta_somente_apos_confirmar_o_codigo(self) -> None:
+        service, accounts, sink = make_self_signup_identity()
 
         challenge = service.request_otp("nova@example.com", "ios_app")
-        account = accounts.find_by_email("nova@example.com")
 
-        self.assertIsNotNone(account)
+        self.assertIsNone(accounts.find_by_email("nova@example.com"))
         self.assertEqual(sink.code_for(challenge.challenge_id), "123456")
         auth = service.verify_otp(challenge.challenge_id, "123456")
         self.assertEqual(auth.session.account.email, "nova@example.com")
+        created = accounts.find_by_email("nova@example.com")
+        self.assertIsNotNone(created)
+        self.assertTrue(created.email_verified)
+
+    def test_codigo_errado_no_cadastro_aberto_nao_cria_conta(self) -> None:
+        service, accounts, _ = make_self_signup_identity()
+        challenge = service.request_otp("terceiro@example.com", "web_widget")
+
+        with self.assertRaises(AuthenticationError):
+            service.verify_otp(challenge.challenge_id, "000000")
+
+        self.assertIsNone(accounts.find_by_email("terceiro@example.com"))
+
+    def test_eventos_de_autenticacao_nao_expoem_codigo_token_ou_email(self) -> None:
+        events: list[tuple[str, dict]] = []
+        service, _, _ = make_self_signup_identity(events=events)
+
+        challenge = service.request_otp("Pessoa@Example.com", "web_widget", request_id="req-evt")
+        with self.assertRaises(AuthenticationError):
+            service.verify_otp(challenge.challenge_id, "999999")
+        auth = service.verify_otp(challenge.challenge_id, "123456")
+        refreshed = service.refresh_session(auth.session.refresh_token)
+        service.logout(refreshed.session.access_token)
+
+        names = [name for name, _ in events]
+        self.assertEqual(
+            names,
+            [
+                "auth.otp_requested",
+                "auth.otp_verification_failed",
+                "auth.account_created",
+                "auth.login_succeeded",
+                "auth.session_refreshed",
+                "auth.logout",
+            ],
+        )
+        self.assertEqual(events[0][1]["request_id"], "req-evt")
+        self.assertEqual(events[1][1]["reason"], "wrong_code")
+        serialized = repr(events)
+        for secret in ("123456", "999999", "tok-acesso", "tok-renovacao", "pessoa@example.com", "Pessoa@Example.com"):
+            self.assertNotIn(secret, serialized)
+
+    def test_quinta_tentativa_errada_bloqueia_o_codigo_e_gera_evento(self) -> None:
+        events: list[tuple[str, dict]] = []
+        service, _, _ = make_self_signup_identity(events=events)
+        challenge = service.request_otp("bloqueio@example.com", "ios_app")
+
+        for _ in range(5):
+            with self.assertRaises(AuthenticationError):
+                service.verify_otp(challenge.challenge_id, "000000")
+        with self.assertRaises(AuthenticationError):
+            service.verify_otp(challenge.challenge_id, "123456")
+
+        self.assertIn("auth.otp_challenge_locked", [name for name, _ in events])
+
+    def test_confirmacao_de_posse_exige_codigo_novo_do_mesmo_email(self) -> None:
+        service, _, _ = make_self_signup_identity("111111", "222222", "333333")
+        login = service.request_otp("dona@example.com", "web_widget")
+        auth = service.verify_otp(login.challenge_id, "111111")
+        token = auth.session.access_token
+
+        other = service.request_otp("outra@example.com", "web_widget")
+        with self.assertRaises(AuthenticationError):
+            service.confirm_account_ownership(token, other.challenge_id, "222222")
+        with self.assertRaises(AuthenticationError):
+            service.confirm_account_ownership(token, login.challenge_id, "111111")
+
+        own = service.request_otp("dona@example.com", "web_widget")
+        account = service.confirm_account_ownership(token, own.challenge_id, "333333")
+        self.assertEqual(account.email, "dona@example.com")
+        with self.assertRaises(AuthenticationError):
+            service.confirm_account_ownership(token, own.challenge_id, "333333")
 
     def test_otp_invalido_consumes_attempt_and_exposes_safe_error(self) -> None:
         service, _, sink = make_identity()

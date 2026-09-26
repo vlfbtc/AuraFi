@@ -15,7 +15,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Iterable, Literal, Protocol
+from typing import Any, Callable, Iterable, Literal, Mapping, Protocol
 
 
 ChannelName = Literal["web_widget", "ios_app", "simulated"]
@@ -33,6 +33,10 @@ AUTH_DISCLAIMER = (
     "A AuraFi oferece apoio à decisão e não garante retorno, execução ou movimentação de fundos."
 )
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+# Recebe eventos de autenticação para a trilha de auditoria; nunca recebe
+# código, token ou e-mail em claro.
+EventSink = Callable[[str, Mapping[str, Any]], None]
 
 
 def utc_now() -> datetime:
@@ -60,6 +64,12 @@ def normalize_email(email: str) -> str:
 
 def _safe_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _email_ref(email: str) -> str:
+    """Referência pseudônima do e-mail para registros, sem o e-mail em claro."""
+
+    return hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,6 +685,7 @@ class IdentityService:
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
         max_otp_attempts: int = DEFAULT_MAX_OTP_ATTEMPTS,
         allow_self_signup: bool = False,
+        event_sink: EventSink | None = None,
     ) -> None:
         if delivery_mode not in {"email", "mock"}:
             raise ValueError("Unsupported OTP delivery mode")
@@ -698,6 +709,7 @@ class IdentityService:
         self._session_ttl = session_ttl
         self._max_otp_attempts = max_otp_attempts
         self._allow_self_signup = allow_self_signup
+        self._event_sink = event_sink
         self._verification_lock = threading.RLock()
 
     def request_otp(
@@ -712,10 +724,9 @@ class IdentityService:
         normalized_email = normalize_email(email)
         channel_context = ChannelContext.from_value(channel)
         account = self._accounts.find_by_email(normalized_email)
-        if account is None and self._allow_self_signup:
-            account = self._accounts.create(
-                Account(account_id=self._id_generator("acc"), email=normalized_email)
-            )
+        # Sem conta, o código só é enviado com cadastro aberto, e a conta só é
+        # criada em verify_otp, depois que o dono do e-mail confirma o código.
+        deliver = account is not None or self._allow_self_signup
         now = context.generated_at
         challenge_id = self._id_generator("chl")
         otp = self._otp_generator.generate()
@@ -733,7 +744,7 @@ class IdentityService:
         )
         self._challenges.save(challenge)
 
-        if account is not None:
+        if deliver:
             try:
                 self._otp_delivery.deliver(
                     OtpDeliveryMessage(
@@ -745,7 +756,16 @@ class IdentityService:
                     )
                 )
             except Exception as exc:  # pragma: no cover - adapter-specific failure
+                self._emit("auth.otp_delivery_failed", context, channel=channel_context.name)
                 raise DeliveryError() from exc
+        self._emit(
+            "auth.otp_requested",
+            context,
+            channel=channel_context.name,
+            email_ref=_email_ref(normalized_email),
+            known_account=account is not None,
+            delivered=deliver,
+        )
         return OtpRequestResult(
             challenge_id=challenge_id,
             expires_at=challenge.expires_at,
@@ -781,30 +801,21 @@ class IdentityService:
         channel: ChannelContext | ChannelName | str | None,
     ) -> AuthenticationResult:
         context = RequestContext.create(request_id, correlation_id, now=self._now())
-        challenge = self._challenges.get(challenge_id)
-        candidate_otp = otp if isinstance(otp, str) else ""
-        digest = challenge.otp_digest if challenge is not None else self._otp_hasher.digest("000000")
-        matches = bool(re.fullmatch(r"[0-9]{6}", candidate_otp)) and self._otp_hasher.matches(
-            candidate_otp if re.fullmatch(r"[0-9]{6}", candidate_otp) else "000000", digest
-        )
         now = context.generated_at
-        if challenge is None or challenge.status != "pending":
-            raise AuthenticationError()
-        if now >= challenge.expires_at:
-            self._challenges.update(replace(challenge, status="expired"))
-            raise AuthenticationError()
-        if challenge.attempts >= self._max_otp_attempts:
-            self._challenges.update(replace(challenge, status="cancelled"))
-            raise AuthenticationError()
-        if not matches:
-            next_attempts = challenge.attempts + 1
-            status: ChallengeStatus = "cancelled" if next_attempts >= self._max_otp_attempts else "pending"
-            self._challenges.update(replace(challenge, attempts=next_attempts, status=status))
-            raise AuthenticationError()
+        challenge = self._check_challenge(challenge_id, otp, now, context)
 
         account = self._accounts.get(challenge.account_id) if challenge.account_id else None
+        created = False
+        if account is None and challenge.account_id is None and self._allow_self_signup:
+            account = self._accounts.find_by_email(challenge.email)
+            if account is None:
+                account = self._accounts.create(
+                    Account(account_id=self._id_generator("acc"), email=challenge.email)
+                )
+                created = True
         if account is None or account.email != challenge.email:
             self._challenges.update(replace(challenge, status="cancelled"))
+            self._emit("auth.otp_verification_failed", context, reason="account_mismatch")
             raise AuthenticationError()
 
         consumed = replace(challenge, status="verified", verified_at=now)
@@ -815,12 +826,89 @@ class IdentityService:
         )
         association = self._associate_channel(account.account_id, resolved_channel, now)
         grant = self._create_session(account, now)
+        if created:
+            self._emit(
+                "auth.account_created", context, account_id=account.account_id, channel=resolved_channel.name
+            )
+        self._emit(
+            "auth.login_succeeded",
+            context,
+            account_id=account.account_id,
+            session_id=grant.session_id,
+            channel=resolved_channel.name,
+        )
         return AuthenticationResult(
             session=grant,
             identity=association.to_identity_dict(email_verified=account.email_verified),
             channel=resolved_channel,
             meta=ApiMeta.from_context(context),
         )
+
+    def confirm_account_ownership(
+        self,
+        access_token: str,
+        challenge_id: str,
+        otp: str,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> Account:
+        """Confirma, com um código novo enviado ao e-mail da conta, uma ação sensível dela.
+
+        Usado antes de apagar a conta: a sessão aberta não basta, o dono do
+        e-mail precisa confirmar com um código que ainda não foi usado.
+        """
+
+        resolved = self.resolve_session(access_token, request_id=request_id, correlation_id=correlation_id)
+        with self._verification_lock:
+            context = RequestContext.create(request_id, correlation_id, now=self._now())
+            now = context.generated_at
+            challenge = self._check_challenge(challenge_id, otp, now, context)
+            if challenge.email != resolved.account.email:
+                self._challenges.update(replace(challenge, status="cancelled"))
+                self._emit("auth.otp_verification_failed", context, reason="account_mismatch")
+                raise AuthenticationError()
+            self._challenges.update(replace(challenge, status="verified", verified_at=now))
+        return resolved.account
+
+    def _check_challenge(
+        self, challenge_id: str, otp: str, now: datetime, context: RequestContext
+    ) -> OtpChallenge:
+        """Valida o código de um desafio pendente; cada erro consome uma tentativa."""
+
+        challenge = self._challenges.get(challenge_id)
+        candidate_otp = otp if isinstance(otp, str) else ""
+        digest = challenge.otp_digest if challenge is not None else self._otp_hasher.digest("000000")
+        matches = bool(re.fullmatch(r"[0-9]{6}", candidate_otp)) and self._otp_hasher.matches(
+            candidate_otp if re.fullmatch(r"[0-9]{6}", candidate_otp) else "000000", digest
+        )
+        reference = str(challenge_id)[:12]
+        if challenge is None or challenge.status != "pending":
+            self._emit("auth.otp_verification_failed", context, reason="unknown_or_used", challenge=reference)
+            raise AuthenticationError()
+        if now >= challenge.expires_at:
+            self._challenges.update(replace(challenge, status="expired"))
+            self._emit("auth.otp_verification_failed", context, reason="expired", challenge=reference)
+            raise AuthenticationError()
+        if challenge.attempts >= self._max_otp_attempts:
+            self._challenges.update(replace(challenge, status="cancelled"))
+            self._emit("auth.otp_challenge_locked", context, attempts=challenge.attempts, challenge=reference)
+            raise AuthenticationError()
+        if not matches:
+            next_attempts = challenge.attempts + 1
+            status: ChallengeStatus = "cancelled" if next_attempts >= self._max_otp_attempts else "pending"
+            self._challenges.update(replace(challenge, attempts=next_attempts, status=status))
+            self._emit(
+                "auth.otp_verification_failed",
+                context,
+                reason="wrong_code",
+                attempts=next_attempts,
+                challenge=reference,
+            )
+            if status == "cancelled":
+                self._emit("auth.otp_challenge_locked", context, attempts=next_attempts, challenge=reference)
+            raise AuthenticationError()
+        return challenge
 
     def resolve_session(
         self,
@@ -863,9 +951,11 @@ class IdentityService:
         now = context.generated_at
         current = self._sessions.get_by_refresh_token_digest(self._token_hasher.digest(refresh_token))
         if current is None or current.status != "active" or now >= current.expires_at:
+            self._emit("auth.session_refresh_failed", context)
             raise AuthenticationError()
         account = self._accounts.get(current.account_id)
         if account is None:
+            self._emit("auth.session_refresh_failed", context)
             raise AuthenticationError()
         access_token = self._token_generator.generate()
         new_refresh_token = self._token_generator.generate()
@@ -876,6 +966,9 @@ class IdentityService:
             refresh_token_digest=self._token_hasher.digest(new_refresh_token),
         )
         self._sessions.update(refreshed)
+        self._emit(
+            "auth.session_refreshed", context, account_id=account.account_id, session_id=refreshed.session_id
+        )
         association = self._channel_identities.first_for_account(account.account_id)
         channel = association.channel if association else ChannelContext.from_value("simulated")
         return AuthenticationResult(
@@ -911,6 +1004,7 @@ class IdentityService:
         if session is None or session.status != "active":
             raise AuthenticationError()
         self._sessions.update(replace(session, status="revoked", ended_at=context.generated_at))
+        self._emit("auth.logout", context, account_id=session.account_id, session_id=session.session_id)
         return ApiMeta.from_context(context)
 
     def associate_channel(
@@ -960,6 +1054,17 @@ class IdentityService:
             expires_at=session.expires_at,
             account=account,
         )
+
+    def _emit(self, event: str, context: RequestContext, **fields: Any) -> None:
+        if self._event_sink is None:
+            return
+        try:
+            self._event_sink(
+                event,
+                {"request_id": context.request_id, "correlation_id": context.correlation_id, **fields},
+            )
+        except Exception:  # pragma: no cover - o registro nunca interrompe a autenticação
+            pass
 
     def _now(self) -> datetime:
         return _as_utc(self._clock())
