@@ -1,0 +1,15 @@
+# Weekly dependency updates. Actions in .github/workflows/ are pinned by commit
+# SHA with the release in a trailing comment; Dependabot bumps both together.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/apps/web-widget"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
