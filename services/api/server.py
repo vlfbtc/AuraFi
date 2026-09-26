@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any, Callable
 
+from . import security_log
 from .app import AuraFiApp, MAX_BODY_BYTES, Request, Response, create_app
 
 
@@ -30,6 +31,14 @@ ALLOWED_HEADERS_DISPLAY = (
     "X-Channel",
 )
 ALLOWED_HEADERS = frozenset(name.casefold() for name in ALLOWED_HEADERS_DISPLAY)
+# A API só devolve JSON: nada pode ser interpretado como página, embutido em
+# outro site ou vazar a URL de origem.
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"),
+    ("Referrer-Policy", "no-referrer"),
+)
 
 
 def allowed_origins_from_env(raw: str | None = None) -> frozenset[str]:
@@ -77,6 +86,12 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
         request_headers = {key: value for key, value in self.headers.items()}
         origin = self.headers.get("Origin")
         if origin is not None and origin.rstrip("/") not in self._allowed_origins:
+            security_log.emit(
+                "security.origin_rejected",
+                route=f"{method} {self.path.split('?', 1)[0]}",
+                origin=origin[:200],
+                source_ip=self._source_ip,
+            )
             response = self._app._error_response(
                 Request(method, self.path, request_headers, None, source_ip=self._source_ip),
                 403,
@@ -87,6 +102,12 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
             self._write_response(response)
             return
         if method == "OPTIONS" and not self._valid_preflight():
+            security_log.emit(
+                "security.preflight_rejected",
+                route=f"{method} {self.path.split('?', 1)[0]}",
+                origin=(origin or "")[:200],
+                source_ip=self._source_ip,
+            )
             response = self._app._error_response(
                 Request(method, self.path, request_headers, None, source_ip=self._source_ip),
                 403,
@@ -114,7 +135,12 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
                 str(exc),
                 retryable=False,
             )
-        except Exception:
+        except Exception as exc:
+            security_log.emit(
+                "system.internal_error",
+                route=f"{method} {self.path.split('?', 1)[0]}",
+                **security_log.exception_fields(exc),
+            )
             response = self._app._error_response(
                 Request(method, self.path, request_headers, None, source_ip=self._source_ip),
                 500,
@@ -162,6 +188,10 @@ class AuraFiRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
+        if self._app.is_production:
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
         origin = self.headers.get("Origin")
         if origin is not None and origin.rstrip("/") in self._allowed_origins:
             self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))

@@ -55,6 +55,8 @@ tags:
     description: Conversas do Hub com continuidade entre canais do MVP.
   - name: alerts
     description: Alertas de mudanças observadas em oportunidades.
+  - name: account
+    description: Direitos do titular sobre os dados da própria conta (exportação e exclusão).
 paths:
   /health:
     get:
@@ -91,7 +93,8 @@ paths:
         Cria um desafio de uso único para a conta interna. O contrato não
         escolhe provedor externo de autenticação e a entrega pode ser simulada
         em desenvolvimento e testes. A resposta não confirma se o e-mail já
-        possui conta.
+        possui conta. Com cadastro aberto, a conta só é criada depois que o
+        código é confirmado em /v1/auth/otp/verify.
       operationId: requestOtp
       security: []
       parameters:
@@ -209,6 +212,24 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
   /v1/profile/risk:
+    get:
+      tags: [profile]
+      summary: Consulta o perfil de risco declarado
+      operationId: getRiskProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: Perfil de risco atual da conta, ou nulo quando ainda não foi declarado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags: [profile]
       summary: Registra ou substitui o perfil de risco declarado
@@ -559,6 +580,79 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /v1/account/export:
+    get:
+      tags: [account]
+      summary: Baixa todos os dados da conta em JSON
+      description: >-
+        Atende os direitos de acesso e de portabilidade (LGPD, art. 18). O
+        documento reúne conta, consentimentos, perfis de risco com respostas,
+        conversas com mensagens, simulações, alertas, sessões e pedidos de
+        código, sem resumos de tokens ou de códigos. Limite de cinco
+        exportações por hora por conta.
+      operationId: exportAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: Dados da conta prontos para download.
+          headers:
+            Content-Disposition:
+              description: Sugere o nome aurafi-meus-dados-AAAA-MM-DD.json.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountExport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/account/deletion:
+    post:
+      tags: [account]
+      summary: Apaga a conta e todos os dados dela
+      description: >-
+        Atende o direito de eliminação (LGPD, art. 18). Exige a sessão atual e
+        um código novo, solicitado em /v1/auth/otp/request para o mesmo
+        e-mail da conta, que confirma que o próprio titular pediu a exclusão.
+        A operação não pode ser desfeita; depois dela, os tokens da sessão
+        deixam de valer.
+      operationId: deleteAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountDeletionInput'
+      responses:
+        '200':
+          description: Conta e dados apagados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDeletionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
 components:
   securitySchemes:
@@ -1811,5 +1905,82 @@ components:
             $ref: '#/components/schemas/Alert'
         pagination:
           $ref: '#/components/schemas/Pagination'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    AccountExport:
+      type: object
+      required: [export_version, generated_at, account, meta]
+      additionalProperties: true
+      properties:
+        export_version:
+          type: string
+          example: '1.0'
+        generated_at:
+          type: string
+          format: date-time
+        account:
+          type: object
+          additionalProperties: true
+        consents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        risk_profiles:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        conversations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        simulations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        alerts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        sessions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    AccountDeletionInput:
+      type: object
+      required: [challenge_id, otp]
+      properties:
+        challenge_id:
+          type: string
+        otp:
+          type: string
+          pattern: '^[0-9]{6}$'
+    AccountDeletionResponse:
+      type: object
+      required: [status, deleted_at, meta]
+      properties:
+        status:
+          type: string
+          enum: [deleted]
+        deleted_at:
+          type: string
+          format: date-time
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    RiskProfileResponse:
+      type: object
+      required: [risk_profile, meta]
+      properties:
+        risk_profile:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/RiskProfile'
         meta:
           $ref: '#/components/schemas/ApiMeta'

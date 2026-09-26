@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+from database import account_data
+
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _SECRET_KEYS = {
     "otp",
@@ -987,6 +989,80 @@ class PostgresRepository:
                 ),
             )
         return self.get_idempotent_response(principal, route, idempotency_key)  # type: ignore[return-value]
+
+    # Dados da conta: exportação, exclusão e retenção (regras em database/account_data.py).
+
+    def export_account_rows(self, account_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Linhas de cada seção exportável da conta, sem colunas secretas."""
+
+        account = self.get_account(account_id)
+        if account is None:
+            return {}
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for spec, condition, count in account_data.statements(self._table_names(), schema="aurafi", placeholder="%s"):
+            if spec.section is None:
+                continue
+            parameter = account["email"] if spec.parameter == "email" else account_id
+            rows = self._fetchall(f"SELECT * FROM aurafi.{spec.table} WHERE {condition}", (parameter,) * count)
+            sections[spec.section] = [
+                {key: value for key, value in row.items() if key not in spec.omit} for row in rows
+            ]
+        return sections
+
+    def delete_account(self, account_id: str) -> dict[str, int]:
+        """Apaga a conta e todos os dados dela numa única transação."""
+
+        account = self.get_account(account_id)
+        if account is None:
+            return {}
+        tables = self._table_names()
+        counts: dict[str, int] = {}
+        with self._transaction() as connection:
+            # Liberado pela migration 003 só enquanto esta transação durar.
+            connection.execute("SELECT set_config('aurafi.account_erasure', 'on', true)")
+            for spec, condition, count in account_data.statements(tables, schema="aurafi", placeholder="%s"):
+                parameter = account["email"] if spec.parameter == "email" else account_id
+                cursor = connection.execute(
+                    f"DELETE FROM aurafi.{spec.table} WHERE {condition}", (parameter,) * count
+                )
+                counts[spec.table] = cursor.rowcount
+        return counts
+
+    def purge_expired_records(
+        self, now: datetime | None = None, *, keep_account_ids: Iterable[str] = ()
+    ) -> dict[str, int]:
+        """Remove códigos vencidos, respostas de idempotência antigas e contas nunca confirmadas."""
+
+        cutoffs = account_data.retention_cutoffs(now or self._now())
+        keep = tuple(keep_account_ids)
+        tables = self._table_names()
+        dependents = " AND ".join(
+            f"NOT EXISTS (SELECT 1 FROM aurafi.{table} d WHERE d.account_id = a.account_id)"
+            for table in account_data.ACCOUNT_DEPENDENT_TABLES
+            if table in tables
+        )
+        keep_clause = " AND NOT (a.account_id = ANY(%s))" if keep else ""
+        counts: dict[str, int] = {}
+        with self._transaction() as connection:
+            counts["otp_challenges"] = connection.execute(
+                "DELETE FROM aurafi.otp_challenges WHERE expires_at < %s", (cutoffs["otp_challenges"],)
+            ).rowcount
+            counts["idempotent_responses"] = connection.execute(
+                "DELETE FROM aurafi.idempotent_responses WHERE created_at < %s",
+                (cutoffs["idempotent_responses"],),
+            ).rowcount
+            counts["unverified_accounts"] = connection.execute(
+                "DELETE FROM aurafi.accounts a WHERE a.email_verified = false AND a.created_at < %s"
+                f"{keep_clause} AND {dependents}",
+                (cutoffs["unverified_accounts"], *((list(keep),) if keep else ())),
+            ).rowcount
+        return counts
+
+    def _table_names(self) -> set[str]:
+        rows = self._fetchall(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'aurafi'"
+        )
+        return {str(row["table_name"]) for row in rows}
 
     @contextmanager
     def _transaction(self) -> Iterator[Any]:

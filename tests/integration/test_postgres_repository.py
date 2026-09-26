@@ -291,5 +291,99 @@ class PostgresRepositoryTest(unittest.TestCase):
             os.environ.pop("DATABASE_URL", None)
 
 
+    def test_account_export_erasure_and_retention_on_postgres(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        import json
+        from unittest.mock import patch
+
+        from services.api import create_app
+        from services.api.app import Request
+        from services.conversation import DeterministicMockLlm
+
+        consent = {"purpose": "conversation", "status": "granted", "policy_version": "aurafi-privacy-2026-09"}
+        answers = [{"question_id": f"q{i}", "answer": "resposta"} for i in range(1, 6)]
+        with patch.dict(os.environ, {"DATABASE_URL": DATABASE_URL, "AURAFI_ALLOW_SELF_SIGNUP": "true"}):
+            app = create_app(market_mode="test", llm=DeterministicMockLlm())
+        try:
+            def call(method: str, path: str, body: dict | None = None, token: str | None = None):
+                headers = {"Authorization": f"Bearer {token}"} if token else {}
+                return app.handle(Request(method=method, target=path, headers=headers, body=body))
+
+            def code_for(email: str) -> tuple[str, str]:
+                requested = call("POST", "/v1/auth/otp/request", {"email": email, "channel": "web_widget"})
+                challenge_id = requested.payload["challenge_id"]
+                return challenge_id, app.otp_sink.code_for(challenge_id)
+
+            def login(email: str) -> str:
+                challenge_id, code = code_for(email)
+                verified = call("POST", "/v1/auth/otp/verify", {"challenge_id": challenge_id, "otp": code})
+                return verified.payload["session"]["access_token"]
+
+            def populate(token: str) -> str:
+                call("PUT", "/v1/profile/risk", {"declared_profile": "moderate", "answers": answers}, token)
+                created = call("POST", "/v1/conversations", {"channel": "web_widget", "consent": consent}, token)
+                conversation_id = created.payload["conversation"]["conversation_id"]
+                call(
+                    "POST",
+                    f"/v1/conversations/{conversation_id}/messages",
+                    {"text": "Explique os riscos.", "channel": "web_widget", "consent": consent},
+                    token,
+                )
+                return conversation_id
+
+            token = login("dona@example.com")
+            conversation_id = populate(token)
+            other = login("fica@example.com")
+            populate(other)
+            account_id = self.repository.find_account_by_email("dona@example.com")["account_id"]
+
+            exported = call("GET", "/v1/account/export", token=token)
+            self.assertEqual(exported.status, 200)
+            self.assertEqual(exported.payload["account"]["email"], "dona@example.com")
+            self.assertEqual(len(exported.payload["conversations"][0]["messages"]), 2)
+            self.assertEqual(len(exported.payload["risk_profiles"][0]["answers"]), 5)
+            serialized = json.dumps(exported.payload)
+            for forbidden in ("access_token_digest", "otp_digest", "fica@example.com"):
+                self.assertNotIn(forbidden, serialized)
+
+            # Fora da exclusão da conta, o perfil de risco continua somente de inclusão.
+            with self.assertRaises(Exception):
+                with self.repository._transaction() as connection:  # noqa: SLF001 - test-only check
+                    connection.execute("DELETE FROM aurafi.risk_profiles WHERE account_id = %s", (account_id,))
+            self.assertIsNotNone(self.repository.get_latest_risk_profile(account_id))
+
+            challenge_id, code = code_for("dona@example.com")
+            deleted = call("POST", "/v1/account/deletion", {"challenge_id": challenge_id, "otp": code}, token)
+            self.assertEqual(deleted.status, 200)
+            self.assertIsNone(self.repository.get_account(account_id))
+            self.assertIsNone(self.repository.get_latest_risk_profile(account_id))
+            self.assertEqual(self.repository.list_messages(conversation_id), [])
+            self.assertEqual(call("GET", "/v1/profile", token=token).status, 401)
+            self.assertEqual(call("GET", "/v1/profile", token=other).status, 200)
+
+            now = datetime.now(timezone.utc)
+            self.repository.save_account(
+                {"account_id": "acct-old", "email": "old@example.test", "created_at": now - timedelta(days=10)}
+            )
+            self.repository.save_otp_challenge(
+                {
+                    "challenge_id": "challenge-old",
+                    "email": "old@example.test",
+                    "channel": "web_widget",
+                    "delivery": "mock",
+                    "otp_digest": "digest-old",
+                    "created_at": now - timedelta(days=3),
+                    "expires_at": now - timedelta(days=3) + timedelta(minutes=5),
+                }
+            )
+            counts = self.repository.purge_expired_records(keep_account_ids=("acc_maria",))
+            self.assertEqual(counts["unverified_accounts"], 1)
+            self.assertEqual(counts["otp_challenges"], 1)
+            self.assertIsNone(self.repository.get_account("acct-old"))
+            self.assertIsNotNone(self.repository.find_account_by_email("fica@example.com"))
+        finally:
+            app.close()
+
+
 if __name__ == "__main__":
     unittest.main()

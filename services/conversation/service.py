@@ -764,6 +764,8 @@ class ConversationService:
         correlation_id: str | None = None,
         channel: ChannelContext | ChannelName | str | None = None,
     ) -> ConversationResponse:
+        # Autentica antes de revelar se a conversa existe: 401 vem antes de 404.
+        self._resolve(access_token, channel=None, request_id=request_id, correlation_id=correlation_id)
         conversation = self._repository.get(conversation_id)
         if conversation is None:
             raise ConversationNotFoundError()
@@ -791,6 +793,8 @@ class ConversationService:
         correlation_id: str | None = None,
         channel_identity_id: str | None = None,
     ) -> MessageResponse:
+        # Autentica antes de revelar se a conversa existe: 401 vem antes de 404.
+        self._resolve(access_token, channel=None, request_id=request_id, correlation_id=correlation_id)
         with self._message_lock:
             conversation = self._repository.get(conversation_id)
             if conversation is None:

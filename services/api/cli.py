@@ -10,9 +10,11 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from services.api.app import API_VERSION, DEFAULT_HOST, DEFAULT_PORT, create_app
+    from services.api import security_log
     from services.api.server import create_server
 else:
     from .app import API_VERSION, DEFAULT_HOST, DEFAULT_PORT, create_app
+    from . import security_log
     from .server import create_server
 
 
@@ -31,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    security_log.configure()
     server = create_server(create_app(), host=args.host, port=args.port)
     print(f"AuraFi API ouvindo em {server.base_url}", flush=True)
     try:

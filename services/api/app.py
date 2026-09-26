@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+from database import account_data
 from database.local.repository import SQLiteRepository, create_repository
 from services.conversation import (
     AuditMetadata,
@@ -86,6 +87,7 @@ from services.recommendation import (
     RiskAnswer,
     RiskProfile,
 )
+from services.api import security_log
 from services.simulated_channel import SimulatedChannelAdapter
 from services.simulation import (
     AssumptionFixtureFormula,
@@ -103,6 +105,10 @@ DEFAULT_FX_BASE_URL = (
     "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata"
 )
 MAX_BODY_BYTES = 1_048_576
+# Rotina de retenção (database/account_data.py) roda no máximo uma vez por hora.
+PURGE_INTERVAL_SECONDS = 3600
+EXPORT_LIMIT_PER_HOUR = 5
+DELETION_ATTEMPTS_PER_WINDOW = 5
 PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production", "producao", "produção"})
 SUPPORTED_ENVIRONMENTS = PRODUCTION_ENVIRONMENTS | frozenset(
     {"", "local", "dev", "development", "test", "testing", "staging"}
@@ -235,9 +241,10 @@ class Response:
 class RateLimitExceeded(RuntimeError):
     """Sinaliza throttling sem incluir identidade, token ou conteúdo no erro."""
 
-    def __init__(self, retry_after: int) -> None:
+    def __init__(self, retry_after: int, scope: str = "") -> None:
         super().__init__("Limite temporário de requisições excedido.")
         self.retry_after = max(1, retry_after)
+        self.scope = scope
 
 
 class _RateLimiter:
@@ -255,7 +262,7 @@ class _RateLimiter:
             while events and events[0] <= cutoff:
                 events.popleft()
             if len(events) >= limit:
-                raise RateLimitExceeded(ceil(events[0] + window_seconds - now))
+                raise RateLimitExceeded(ceil(events[0] + window_seconds - now), key.rsplit(":", 1)[0])
             events.append(now)
 
 
@@ -657,6 +664,16 @@ class AuraFiApp:
         otp_generator = FixedOtpGenerator(dev_otp) if dev_otp and not self.is_production else None
 
         initial_account = account or Account("acc_maria", "maria@example.com")
+        self._retained_account_ids = (initial_account.account_id,)
+        self._last_purge: float | None = None
+        # A exclusão automática de registros vencidos é ligada por padrão fora
+        # de produção; em produção, só com AURAFI_RETENTION_PURGE=true.
+        retention = os.environ.get("AURAFI_RETENTION_PURGE", "").strip().casefold()
+        self._retention_enabled = (
+            retention in {"1", "true", "yes"}
+            if self.is_production
+            else retention not in {"0", "false", "no", "off"}
+        )
         database_url = os.environ.get("DATABASE_URL", "").strip()
         database_path = os.environ.get("AURAFI_DB_PATH", "").strip()
         if self.is_production and not database_url and (not database_path or database_path == ":memory:"):
@@ -711,6 +728,7 @@ class AuraFiApp:
                 HmacOtpHasher(otp_pepper.encode("utf-8")) if otp_pepper else None
             ),
             allow_self_signup=_env_flag("AURAFI_ALLOW_SELF_SIGNUP"),
+            event_sink=lambda event, fields: security_log.emit(event, **fields),
         )
         network_enabled = _env_flag("AURAFI_ENABLE_MARKET_NETWORK")
         configured_market_mode = market_mode
@@ -799,6 +817,12 @@ class AuraFiApp:
     def handle(self, request: Request) -> Response:
         """Processa uma requisicao sem depender de um servidor HTTP."""
 
+        route_label = f"{request.method.upper()} {request.path.rstrip('/') or '/'}"
+        with security_log.bind(route=route_label, source_ip=request.source_ip):
+            self._maybe_purge()
+            return self._handle(request)
+
+    def _handle(self, request: Request) -> Response:
         try:
             request = _ensure_request_context(request)
             _reject_prohibited(request.body)
@@ -832,6 +856,10 @@ class AuraFiApp:
                 return self._create_conversation(request)
             if route == ("GET", "/v1/alerts"):
                 return self._alerts_response(request)
+            if route == ("GET", "/v1/account/export"):
+                return self._account_export(request)
+            if route == ("POST", "/v1/account/deletion"):
+                return self._account_deletion(request)
 
             opportunity_get = _opportunity_get_route(request.path)
             if method == "GET" and opportunity_get is not None:
@@ -857,6 +885,12 @@ class AuraFiApp:
                 retryable=False,
             )
         except RateLimitExceeded as exc:
+            security_log.emit(
+                "security.rate_limited",
+                request_id=request.request_id,
+                scope=exc.scope,
+                retry_after=exc.retry_after,
+            )
             response = self._error_response(
                 request,
                 429,
@@ -866,10 +900,13 @@ class AuraFiApp:
             )
             return Response(response.status, response.payload, {"Retry-After": str(exc.retry_after)})
         except ProhibitedOperationError as exc:
+            security_log.emit("security.prohibited_operation", request_id=request.request_id)
             return self._error_response(request, 400, exc.code, str(exc), retryable=False)
         except IdentityServiceError as exc:
             if isinstance(exc, AuthenticationError):
                 status = 401
+                if not request.path.startswith("/v1/auth/"):
+                    security_log.emit("auth.request_rejected", request_id=request.request_id)
             elif isinstance(exc, DeliveryError):
                 status = 503
             else:
@@ -907,7 +944,12 @@ class AuraFiApp:
                 retryable=False,
                 details={"reason": type(exc).__name__},
             )
-        except Exception:
+        except Exception as exc:
+            security_log.emit(
+                "system.internal_error",
+                request_id=request.request_id,
+                **security_log.exception_fields(exc),
+            )
             return self._error_response(
                 request,
                 500,
@@ -915,6 +957,102 @@ class AuraFiApp:
                 "Nao foi possivel processar a requisicao.",
                 retryable=True,
             )
+
+    def _maybe_purge(self) -> None:
+        """Aplica a retenção de dados no máximo uma vez por hora (códigos, idempotência, contas não confirmadas)."""
+
+        if (
+            not self._retention_enabled
+            or self.persistence is None
+            or not hasattr(self.persistence, "purge_expired_records")
+        ):
+            return
+        now = monotonic()
+        with self._lock:
+            if self._last_purge is not None and now - self._last_purge < PURGE_INTERVAL_SECONDS:
+                return
+            self._last_purge = now
+        try:
+            counts = self.persistence.purge_expired_records(keep_account_ids=self._retained_account_ids)
+        except Exception as exc:  # pragma: no cover - a limpeza nunca derruba a requisição
+            security_log.emit("retention.purge_failed", **security_log.exception_fields(exc))
+            return
+        security_log.emit("retention.purge_completed", **{f"removed_{key}": value for key, value in counts.items()})
+
+    def _account_export(self, request: Request) -> Response:
+        """Baixar meus dados: todos os dados da conta em um arquivo JSON (LGPD, art. 18, II e V)."""
+
+        resolved = self._resolve(request)
+        account_id = resolved.account.account_id
+        self._rate_limiter.check(
+            f"export:account:{account_id}", limit=EXPORT_LIMIT_PER_HOUR, window_seconds=3600
+        )
+        if self.persistence is None:
+            return self._persistence_required(request)
+        generated_at = utc_now()
+        document = account_data.build_export(
+            self.persistence.export_account_rows(account_id), generated_at=generated_at
+        )
+        document["meta"] = self._meta(request).to_dict()
+        security_log.emit("privacy.data_exported", request_id=request.request_id, account_id=account_id)
+        filename = f"aurafi-meus-dados-{generated_at.date().isoformat()}.json"
+        return Response(200, document, {"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    def _account_deletion(self, request: Request) -> Response:
+        """Apagar minha conta: exige sessão válida e um código novo enviado ao e-mail da conta."""
+
+        token = self._bearer(request)
+        data = _object_body(request)
+        challenge_id = data.get("challenge_id")
+        otp = data.get("otp")
+        if not isinstance(challenge_id, str) or not challenge_id.strip() or not isinstance(otp, str):
+            raise RequestValidationError(
+                "Informe o challenge_id e o código enviado por e-mail.",
+                details={"fields": ["challenge_id", "otp"]},
+            )
+        resolved = self._resolve(request)
+        self._rate_limiter.check(
+            f"deletion:account:{resolved.account.account_id}",
+            limit=DELETION_ATTEMPTS_PER_WINDOW,
+            window_seconds=900,
+        )
+        if self.persistence is None:
+            return self._persistence_required(request)
+        account = self.identity.confirm_account_ownership(
+            token,
+            challenge_id.strip(),
+            otp.strip(),
+            request_id=request.request_id,
+            correlation_id=request.correlation_id,
+        )
+        counts = self.persistence.delete_account(account.account_id)
+        with self._lock:
+            self._profiles.pop(account.account_id, None)
+            self._alerts.pop(account.account_id, None)
+        deleted_at = utc_now()
+        security_log.emit(
+            "privacy.account_deleted",
+            request_id=request.request_id,
+            account_ref=security_log.reference(account.account_id),
+            removed_records=sum(counts.values()),
+        )
+        return Response(
+            200,
+            {
+                "status": "deleted",
+                "deleted_at": deleted_at.isoformat().replace("+00:00", "Z"),
+                "meta": self._meta(request).to_dict(),
+            },
+        )
+
+    def _persistence_required(self, request: Request) -> Response:
+        return self._error_response(
+            request,
+            503,
+            "PERSISTENCE_REQUIRED",
+            "Esta operação exige o banco de dados persistente.",
+            retryable=False,
+        )
 
     def _health(self, request: Request) -> Response:
         meta = self._meta(request)
@@ -1188,26 +1326,46 @@ class AuraFiApp:
 
     def _create_conversation(self, request: Request) -> Response:
         token = self._bearer(request)
+        # Autentica antes de validar o corpo: sessão inválida responde 401, e não 422.
+        account_id = self._resolve(request).account.account_id
         data = _object_body(request)
         create = ConversationCreateRequest.from_mapping(data)
         if create.channel not in SUPPORTED_CHANNELS:
             raise UnsupportedChannelError()
+        if create.initial_message:
+            self._check_llm_limit(request, account_id=account_id)
         result = self.conversation.create_conversation(
             token,
             request=create,
             request_id=request.request_id,
             correlation_id=request.correlation_id,
         )
+        consent = create.consent
+        security_log.emit(
+            "privacy.consent_recorded",
+            request_id=request.request_id,
+            purpose=consent.purpose,
+            status=consent.status,
+            policy_version=consent.policy_version,
+            memory=consent.memory,
+            analytics=consent.analytics,
+            channel=str(getattr(create.channel, "name", create.channel)),
+        )
         return Response(201, result.to_dict())
 
-    def _conversation_message(self, request: Request, conversation_id: str) -> Response:
-        token = self._bearer(request)
-        principal = sha256(token.encode("utf-8")).hexdigest()
+    def _check_llm_limit(self, request: Request, *, account_id: str | None = None) -> None:
+        """Limita mensagens à Aura por conta, e não por sessão (renovar ou entrar de novo não zera o limite)."""
+
+        account_id = account_id or self._resolve(request).account.account_id
         self._rate_limiter.check(
-            f"llm:principal:{principal}",
+            f"llm:account:{account_id}",
             limit=self._llm_request_limit,
             window_seconds=3600,
         )
+
+    def _conversation_message(self, request: Request, conversation_id: str) -> Response:
+        token = self._bearer(request)
+        self._check_llm_limit(request)
         data = _object_body(request)
         message = MessageRequest.from_mapping(data, default_channel=data.get("channel"))
         correlation_id = request.provided_correlation_id

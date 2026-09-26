@@ -17,7 +17,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
+from database import account_data
+
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+# Mesmo texto de schema.sql; recriado ao fim da exclusão de uma conta.
+_RISK_PROFILES_APPEND_ONLY_DELETE = (
+    "CREATE TRIGGER IF NOT EXISTS risk_profiles_append_only_delete\n"
+    "BEFORE DELETE ON risk_profiles\n"
+    "BEGIN\n"
+    "    SELECT RAISE(ABORT, 'risk profiles are append-only');\n"
+    "END"
+)
 _SECRET_KEYS = {
     "otp",
     "one_time_password",
@@ -894,6 +904,78 @@ class SQLiteRepository:
                 ),
             )
         return self.get_idempotent_response(principal, route, idempotency_key)  # type: ignore[return-value]
+
+    # Dados da conta: exportação, exclusão e retenção (regras em database/account_data.py).
+
+    def export_account_rows(self, account_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Linhas de cada seção exportável da conta, sem colunas secretas."""
+
+        account = self.get_account(account_id)
+        if account is None:
+            return {}
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for spec, condition, count in account_data.statements(self._table_names(), schema="", placeholder="?"):
+            if spec.section is None:
+                continue
+            parameter = account["email"] if spec.parameter == "email" else account_id
+            rows = self._fetchall(f"SELECT * FROM {spec.table} WHERE {condition}", (parameter,) * count)
+            sections[spec.section] = [
+                {key: value for key, value in dict(row).items() if key not in spec.omit} for row in rows
+            ]
+        return sections
+
+    def delete_account(self, account_id: str) -> dict[str, int]:
+        """Apaga a conta e todos os dados dela numa única transação."""
+
+        account = self.get_account(account_id)
+        if account is None:
+            return {}
+        counts: dict[str, int] = {}
+        with self._transaction() as connection:
+            # O perfil de risco é somente de inclusão; a proteção é suspensa
+            # apenas dentro desta transação de exclusão da conta.
+            connection.execute("DROP TRIGGER IF EXISTS risk_profiles_append_only_delete")
+            for spec, condition, count in account_data.statements(self._table_names(), schema="", placeholder="?"):
+                parameter = account["email"] if spec.parameter == "email" else account_id
+                cursor = connection.execute(f"DELETE FROM {spec.table} WHERE {condition}", (parameter,) * count)
+                counts[spec.table] = cursor.rowcount
+            connection.execute(_RISK_PROFILES_APPEND_ONLY_DELETE)
+        return counts
+
+    def purge_expired_records(
+        self, now: datetime | None = None, *, keep_account_ids: Iterable[str] = ()
+    ) -> dict[str, int]:
+        """Remove códigos vencidos, respostas de idempotência antigas e contas nunca confirmadas."""
+
+        cutoffs = account_data.retention_cutoffs(now or self._now())
+        keep = tuple(keep_account_ids)
+        tables = self._table_names()
+        dependents = " AND ".join(
+            f"NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.account_id = accounts.account_id)"
+            for table in account_data.ACCOUNT_DEPENDENT_TABLES
+            if table in tables
+        )
+        keep_clause = f" AND account_id NOT IN ({', '.join('?' for _ in keep)})" if keep else ""
+        counts: dict[str, int] = {}
+        with self._transaction() as connection:
+            counts["otp_challenges"] = connection.execute(
+                "DELETE FROM otp_challenges WHERE expires_at < ?",
+                (self._timestamp(cutoffs["otp_challenges"]),),
+            ).rowcount
+            counts["idempotent_responses"] = connection.execute(
+                "DELETE FROM idempotent_responses WHERE created_at < ?",
+                (self._timestamp(cutoffs["idempotent_responses"]),),
+            ).rowcount
+            counts["unverified_accounts"] = connection.execute(
+                "DELETE FROM accounts WHERE email_verified = 0 AND created_at < ?"
+                f"{keep_clause} AND {dependents}",
+                (self._timestamp(cutoffs["unverified_accounts"]), *keep),
+            ).rowcount
+        return counts
+
+    def _table_names(self) -> set[str]:
+        rows = self._fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+        return {str(row["name"]) for row in rows}
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
