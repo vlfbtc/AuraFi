@@ -1,5 +1,10 @@
 # Weekly dependency updates. Actions in .github/workflows/ are pinned by commit
 # SHA with the release in a trailing comment; Dependabot bumps both together.
+# Packages that must move in step are grouped into one PR: react-dom and
+# @types/react-dom peer-depend on the matching react and @types/react, and
+# @vitejs/plugin-react on a vite major, so a partial bump breaks `npm ci` with
+# ERESOLVE. All action bumps share one PR too. Groups apply to version updates
+# only (the `applies-to` default).
 version: 2
 updates:
   - package-ecosystem: "npm"
@@ -7,9 +12,24 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
