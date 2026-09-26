@@ -46,10 +46,12 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
 - Geração real de alertas (BE-008 `services/notifications/alerts.py`, motor
   já existente, agora com política concreta e disparo ligado à leitura de
   mercado). Cada `GET /v1/opportunities`, detalhe, simulação e recomendação
-  compara o snapshot atual ao último observado; muda ≥2pp de APY, muda o
-  nível de risco derivado (`derive_risk_level`) ou aparece uma oportunidade
-  nova → alerta é persistido de verdade (nunca na primeira leitura, que só
-  estabelece a base, e nunca duplicado para a mesma mudança). `data_stale`
+  compara o snapshot atual ao último observado **pela mesma conta**; muda ≥2pp
+  de APY, muda o nível de risco derivado (`derive_risk_level`) ou aparece uma
+  oportunidade nova → alerta é persistido de verdade (nunca na primeira
+  leitura da conta, que só estabelece a base, e nunca duplicado para a mesma
+  mudança). Uma mudança vista primeiro por outra conta continua gerando alerta
+  para cada conta que acompanha o mercado. `data_stale`
   continua desabilitado por não mapear para uma única oportunidade de forma
   limpa. Thresholds em `DEFAULT_ALERT_POLICY` (`services/api/app.py`) são um
   default de MVP, ajustável e sem gate de compliance (ao contrário da

@@ -658,8 +658,8 @@ class AuraFiApp:
         self._idempotent_responses: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._alert_service = AlertService(disclaimer=DISCLAIMER)
         self._alert_policy = DEFAULT_ALERT_POLICY
-        self._alert_market_state: dict[str, AlertObservation] = {}
-        self._alert_market_seeded = False
+        # Última observação de mercado vista por cada conta, por oportunidade.
+        self._alert_market_state: dict[str, dict[str, AlertObservation]] = {}
         dev_otp = os.environ.get("AURAFI_DEV_OTP_CODE")
         otp_generator = FixedOtpGenerator(dev_otp) if dev_otp and not self.is_production else None
 
@@ -1029,6 +1029,7 @@ class AuraFiApp:
         with self._lock:
             self._profiles.pop(account.account_id, None)
             self._alerts.pop(account.account_id, None)
+            self._alert_market_state.pop(account.account_id, None)
         deleted_at = utc_now()
         security_log.emit(
             "privacy.account_deleted",
@@ -1508,33 +1509,46 @@ class AuraFiApp:
         return snapshot
 
     def _evaluate_market_alerts(self, account_id: str, items: Any) -> None:
-        seeding = not self._alert_market_seeded
-        for item in items:
-            risk_level = item.risk_level
-            if risk_level in (None, "unknown"):
-                risk_level = derive_risk_level(item.apy_value, item.tvl_value, item.audit_status)
-            current = AlertObservation(
-                opportunity_id=item.opportunity_id,
-                data_source=item.data_source,
-                apy=item.apy_value,
-                risk_level=risk_level,
-            )
-            previous = self._alert_market_state.get(current.opportunity_id)
-            if previous is not None and current.data_source.observed_at <= previous.data_source.observed_at:
-                continue
-            if not seeding:
+        """Compara o mercado com o que esta conta viu por último.
+
+        Cada conta tem a própria referência: uma mudança observada primeiro por
+        outra conta continua gerando alerta para esta. A primeira leitura da
+        conta só registra a referência, sem alertas.
+        """
+
+        pending: list[tuple[Any, str, AlertEvent]] = []
+        with self._lock:
+            seen = self._alert_market_state.get(account_id)
+            seeding = seen is None
+            if seen is None:
+                seen = self._alert_market_state[account_id] = {}
+            for item in items:
+                risk_level = item.risk_level
+                if risk_level in (None, "unknown"):
+                    risk_level = derive_risk_level(item.apy_value, item.tvl_value, item.audit_status)
+                current = AlertObservation(
+                    opportunity_id=item.opportunity_id,
+                    data_source=item.data_source,
+                    apy=item.apy_value,
+                    risk_level=risk_level,
+                )
+                previous = seen.get(current.opportunity_id)
+                if previous is not None and current.data_source.observed_at <= previous.data_source.observed_at:
+                    continue
+                seen[current.opportunity_id] = current
+                if seeding:
+                    continue
                 events = (
                     [AlertEvent(AlertType.APY_CHANGE, current, previous), AlertEvent(AlertType.RISK_CHANGE, current, previous)]
                     if previous is not None
                     else [AlertEvent(AlertType.NEW_OPPORTUNITY, current, is_new=True, is_monitored=True)]
                 )
-                for event in events:
-                    result = self._alert_service.evaluate(account_id, event, self._alert_policy, now=utc_now())
-                    if result.generated and result.alert is not None:
-                        self._ensure_opportunity_persisted(item, risk_level)
-                        self._save_generated_alert(account_id, result.alert)
-            self._alert_market_state[current.opportunity_id] = current
-        self._alert_market_seeded = True
+                pending.extend((item, risk_level, event) for event in events)
+        for item, risk_level, event in pending:
+            result = self._alert_service.evaluate(account_id, event, self._alert_policy, now=utc_now())
+            if result.generated and result.alert is not None:
+                self._ensure_opportunity_persisted(item, risk_level)
+                self._save_generated_alert(account_id, result.alert)
 
     def _ensure_opportunity_persisted(self, item: Any, risk_level: str) -> None:
         if self.persistence is None or self.persistence.get_opportunity(item.opportunity_id) is not None:

@@ -426,6 +426,27 @@ class CrossAccountAuthorizationSuite:
 
         self.assertIn(alert_id, self.alert_ids(self.ana, "&unread_only=true"))
 
+    def test_market_change_alerts_every_account_that_follows_the_market(self) -> None:
+        # As duas contas já acompanhavam o mercado antes da mudança.
+        for reader in (self.ana, self.bia):
+            status, payload = self.call("GET", "/v1/opportunities", token=reader.access_token)
+            self.assertEqual(status, 200, payload)
+        before = {reader.email: set(self.alert_ids(reader)) for reader in (self.ana, self.bia)}
+
+        # De 5,0% para 8,5%: variação acima do limite de 2 pontos da política.
+        self.market.publish(apy=8.5)
+        created: dict[str, set[str]] = {}
+        # A Ana vê a mudança primeiro; a Bia ainda precisa receber o próprio alerta.
+        for reader in (self.ana, self.bia):
+            with self.subTest(conta=reader.email):
+                status, payload = self.call("GET", "/v1/opportunities", token=reader.access_token)
+                self.assertEqual(status, 200, payload)
+                created[reader.email] = set(self.alert_ids(reader)) - before[reader.email]
+                self.assertTrue(
+                    created[reader.email], "cada conta deveria receber o alerta da mudança que observou"
+                )
+        self.assertTrue(created[self.ana.email].isdisjoint(created[self.bia.email]))
+
     def test_alert_listing_only_returns_own_alerts(self) -> None:
         ana_alerts = set(self.give_alerts_to(self.ana))
         bia_alerts = set(self.give_alerts_to(self.bia))
