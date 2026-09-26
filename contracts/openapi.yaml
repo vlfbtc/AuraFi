@@ -691,7 +691,10 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: Chave para evitar duplicação em comandos repetíveis.
+      description: >-
+        Chave para evitar duplicação em comandos repetíveis. Vale para a conta:
+        repetir a mesma chave com o mesmo corpo, mesmo depois de renovar a
+        sessão, devolve a resposta original; com outro corpo, responde 409.
       schema:
         type: string
         minLength: 8

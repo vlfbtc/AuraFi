@@ -324,7 +324,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 
 -- Backs the Idempotency-Key contract (contracts/openapi.yaml); `principal`
--- is a SHA-256 digest of the bearer token, never the token itself.
+-- is the account_id that sent the request, so a retry after a session refresh
+-- still replays. Rows written before that change hold a SHA-256 digest of the
+-- bearer token, never the token itself.
 CREATE TABLE IF NOT EXISTS idempotent_responses (
     principal TEXT NOT NULL,
     route TEXT NOT NULL,

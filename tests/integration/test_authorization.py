@@ -574,6 +574,40 @@ class CrossAccountAuthorizationSuite:
         self.assertEqual(status, 200, risk)
         self.assertEqual(risk["risk_profile"]["declared_profile"], "conservative")
 
+    def test_idempotency_key_still_replays_after_session_refresh(self) -> None:
+        body = {"declared_profile": "conservative", "answers": RISK_ANSWERS}
+        headers = {"Idempotency-Key": "perfil-apos-renovacao"}
+        status, first = self.call(
+            "PUT", "/v1/profile/risk", body, token=self.ana.access_token, headers=headers
+        )
+        self.assertEqual(status, 200, first)
+
+        status, refreshed = self.call(
+            "POST", "/v1/auth/refresh", {"refresh_token": self.ana.refresh_token}
+        )
+        self.assertEqual(status, 200, refreshed)
+        new_token = refreshed["session"]["access_token"]
+        self.assertNotEqual(new_token, self.ana.access_token)
+
+        # O cliente repete o pedido com o token novo: devolve a resposta original.
+        status, replayed = self.call(
+            "PUT", "/v1/profile/risk", body, token=new_token, headers=headers
+        )
+        self.assertEqual(status, 200, replayed)
+        self.assertEqual(replayed["risk_profile"], first["risk_profile"])
+        status, risk = self.call("GET", "/v1/profile/risk", token=new_token)
+        self.assertEqual(status, 200, risk)
+        self.assertEqual(risk["risk_profile"]["declared_at"], first["risk_profile"]["declared_at"])
+
+        status, conflict = self.call(
+            "PUT",
+            "/v1/profile/risk",
+            {**body, "declared_profile": "aggressive"},
+            token=new_token,
+            headers=headers,
+        )
+        self.assert_denied(status, conflict, 409, "IDEMPOTENCY_KEY_CONFLICT")
+
     # Sessão ---------------------------------------------------------------
 
     def test_protected_routes_reject_missing_or_invalid_credentials(self) -> None:

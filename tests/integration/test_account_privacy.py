@@ -8,6 +8,7 @@ segurança das respostas, os eventos de auditoria e a rotina de retenção.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from http.client import HTTPConnection
 import json
 import os
@@ -110,6 +111,29 @@ class AccountPrivacyTests(unittest.TestCase):
         other = self.login("fica@example.com")
         self.populate(other)
         account_id = self.app.persistence.find_account_by_email("apagar@example.com")["account_id"]
+        other_id = self.app.persistence.find_account_by_email("fica@example.com")["account_id"]
+        route, key = "PUT /v1/profile/risk", "perfil-antes-de-apagar"
+        for owner in (token, other):
+            repeated = self.app.handle(
+                Request(
+                    method="PUT",
+                    target="/v1/profile/risk",
+                    headers={"Authorization": f"Bearer {owner}", "Idempotency-Key": key},
+                    body={"declared_profile": "moderate", "answers": ANSWERS},
+                )
+            )
+            self.assertEqual(repeated.status, 200)
+        # Linha antiga, de quando a chave era associada ao token da sessão.
+        legacy = sha256(token.encode("utf-8")).hexdigest()
+        self.app.persistence.save_idempotent_response(
+            principal=legacy,
+            route=route,
+            idempotency_key=key,
+            request_hash="0" * 64,
+            response_status=200,
+            response_payload={"status": "ok"},
+        )
+        self.assertIsNotNone(self.app.persistence.get_idempotent_response(account_id, route, key))
 
         missing = self.call("POST", "/v1/account/deletion", {}, token)
         self.assertEqual(missing.status, 400)
@@ -126,6 +150,9 @@ class AccountPrivacyTests(unittest.TestCase):
         self.assertIsNone(self.app.persistence.find_account_by_email("apagar@example.com"))
         self.assertIsNone(self.app.persistence.get_latest_risk_profile(account_id))
         self.assertEqual(self.app.persistence.list_messages(conversation_id), [])
+        self.assertIsNone(self.app.persistence.get_idempotent_response(account_id, route, key))
+        self.assertIsNone(self.app.persistence.get_idempotent_response(legacy, route, key))
+        self.assertIsNotNone(self.app.persistence.get_idempotent_response(other_id, route, key))
         self.assertEqual(self.call("GET", "/v1/profile", token=token).status, 401)
         self.assertEqual(self.call("GET", "/v1/profile", token=other).status, 200)
         self.assertEqual(

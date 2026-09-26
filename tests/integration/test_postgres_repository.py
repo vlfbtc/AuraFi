@@ -293,6 +293,7 @@ class PostgresRepositoryTest(unittest.TestCase):
 
     def test_account_export_erasure_and_retention_on_postgres(self) -> None:
         from datetime import datetime, timedelta, timezone
+        import hashlib
         import json
         from unittest.mock import patch
 
@@ -336,6 +337,18 @@ class PostgresRepositoryTest(unittest.TestCase):
             other = login("fica@example.com")
             populate(other)
             account_id = self.repository.find_account_by_email("dona@example.com")["account_id"]
+            other_id = self.repository.find_account_by_email("fica@example.com")["account_id"]
+            route, key = "PUT /v1/profile/risk", "perfil-antes-de-apagar"
+            legacy = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            for principal in (account_id, legacy, other_id):
+                self.repository.save_idempotent_response(
+                    principal=principal,
+                    route=route,
+                    idempotency_key=key,
+                    request_hash="0" * 64,
+                    response_status=200,
+                    response_payload={"status": "ok"},
+                )
 
             exported = call("GET", "/v1/account/export", token=token)
             self.assertEqual(exported.status, 200)
@@ -358,6 +371,9 @@ class PostgresRepositoryTest(unittest.TestCase):
             self.assertIsNone(self.repository.get_account(account_id))
             self.assertIsNone(self.repository.get_latest_risk_profile(account_id))
             self.assertEqual(self.repository.list_messages(conversation_id), [])
+            self.assertIsNone(self.repository.get_idempotent_response(account_id, route, key))
+            self.assertIsNone(self.repository.get_idempotent_response(legacy, route, key))
+            self.assertIsNotNone(self.repository.get_idempotent_response(other_id, route, key))
             self.assertEqual(call("GET", "/v1/profile", token=token).status, 401)
             self.assertEqual(call("GET", "/v1/profile", token=other).status, 200)
 

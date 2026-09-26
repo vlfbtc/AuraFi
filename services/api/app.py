@@ -1573,13 +1573,18 @@ class AuraFiApp:
     def _dispatch_idempotent(
         self, request: Request, handler: Callable[[], Response]
     ) -> Response:
-        """Mesma chave e corpo reexibe a resposta original; corpo diferente é 409, nunca sobrescreve."""
+        """Mesma chave e corpo reexibe a resposta original; corpo diferente é 409, nunca sobrescreve.
+
+        A chave vale para a conta, e não para o token de acesso: repetir o pedido
+        depois de renovar a sessão devolve a resposta original em vez de repetir
+        a operação.
+        """
 
         idempotency_key = _header(request.headers, "idempotency-key")
         if not idempotency_key:
             return handler()
         try:
-            principal = sha256(self._bearer(request).encode("utf-8")).hexdigest()
+            principal = self._resolve(request).account.account_id
         except AuthenticationError:
             return handler()
         route = f"{request.method.upper()} {request.path.rstrip('/') or '/'}"

@@ -69,7 +69,8 @@ ACCOUNT_TABLES: tuple[AccountTable, ...] = (
     AccountTable("channel_identities", _ACCOUNT, section="channel_identities"),
     AccountTable(
         "idempotent_responses",
-        "principal IN (SELECT access_token_digest FROM {s}sessions WHERE account_id = {p} "
+        # O principal é a conta; linhas gravadas antes guardam o resumo do token da sessão.
+        "principal = {p} OR principal IN (SELECT access_token_digest FROM {s}sessions WHERE account_id = {p} "
         "UNION SELECT refresh_token_digest FROM {s}sessions WHERE account_id = {p})",
     ),
     AccountTable(

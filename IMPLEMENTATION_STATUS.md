@@ -30,7 +30,9 @@ confronto com o código executável (backend, analytics, web widget e app iOS).
   /v1/simulations, POST /v1/recommendations, POST
   /v1/conversations/{id}/messages): uma repetição com a mesma chave e o mesmo
   corpo reexibe a resposta original sem repetir o efeito colateral; a mesma
-  chave com corpo diferente retorna 409.
+  chave com corpo diferente retorna 409. A chave vale para a conta, e não para
+  o token de acesso, então a repetição continua reconhecida depois de renovar
+  a sessão.
 - Backend de PostgreSQL gerenciado como alternativa ao SQLite local, ativado
   por `DATABASE_URL` (prioridade sobre `AURAFI_DB_PATH`). Adapter em
   `database/postgres/repository.py` espelha o contrato do `SQLiteRepository`
