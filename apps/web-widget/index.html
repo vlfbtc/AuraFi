@@ -4,10 +4,78 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f8f5ef" />
-    <title>AuraFi · Web Widget</title>
+    <title>AuraFi · Decida onde colocar suas stablecoins com clareza</title>
+    <meta name="description" content="Compare oportunidades DeFi para suas stablecoins paradas com dados, riscos e simulações educativas. Sem custódia, sem conexão de wallet e sem ordens." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://aurafi-web-widget.onrender.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AuraFi" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:url" content="https://aurafi-web-widget.onrender.com/" />
+    <meta property="og:title" content="AuraFi · Decida onde colocar suas stablecoins com clareza" />
+    <meta property="og:description" content="Compare oportunidades DeFi para suas stablecoins paradas com dados, riscos e simulações educativas. Sem custódia, sem conexão de wallet e sem ordens." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="AuraFi · Decida onde colocar suas stablecoins com clareza" />
+    <meta name="twitter:description" content="Compare oportunidades DeFi para suas stablecoins paradas com dados, riscos e simulações educativas. Sem custódia, sem conexão de wallet e sem ordens." />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://aurafi-web-widget.onrender.com/#website",
+            "url": "https://aurafi-web-widget.onrender.com/",
+            "name": "AuraFi",
+            "description": "Apoio à decisão para quem tem stablecoins paradas: oportunidades DeFi comparadas com dados, riscos e simulações educativas.",
+            "inLanguage": "pt-BR"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://aurafi-web-widget.onrender.com/#app",
+            "name": "AuraFi",
+            "url": "https://aurafi-web-widget.onrender.com/",
+            "applicationCategory": "FinanceApplication",
+            "operatingSystem": "Web",
+            "inLanguage": "pt-BR",
+            "description": "Compare oportunidades DeFi para suas stablecoins paradas com dados, riscos e simulações educativas. Sem custódia, sem conexão de wallet e sem ordens."
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Static copy of the welcome screen, readable without JavaScript.
+           React replaces it when the app mounts; keep it in step with renderWelcome in src/App.tsx. -->
+      <div class="app-shell">
+        <header class="site-header">
+          <a class="brand-button" href="/"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>AuraFi</span></a>
+          <div class="header-session"><span class="header-caption">Web Widget · onboarding</span></div>
+        </header>
+        <main class="main-content view-welcome">
+          <section class="welcome-grid" aria-labelledby="welcome-title">
+            <div class="welcome-copy">
+              <p class="eyebrow">AuraFi · Clareza para investir</p>
+              <h1 id="welcome-title">Onde colocar suas stablecoins em 2026.</h1>
+              <p class="lead">Uma conversa clara para estudar oportunidades DeFi, declarar seu perfil e entender os próximos passos antes de decidir.</p>
+              <noscript><p class="lead">Ative o JavaScript do navegador para começar seu perfil na AuraFi.</p></noscript>
+              <p class="quiet-note"><span class="quiet-dot" aria-hidden="true"></span> Leva cerca de 3 minutos · você pode revisar tudo</p>
+            </div>
+            <aside class="welcome-card" aria-label="Como funciona o onboarding">
+              <div class="card-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+              <p class="card-kicker">Hub conversacional · Web Widget</p>
+              <h2>Clareza para decidir melhor.</h2>
+              <ol class="journey-list">
+                <li><span>01</span><div><strong>Entrar com e-mail</strong><small>Uma conta interna simples e segura.</small></div></li>
+                <li><span>02</span><div><strong>Responder cinco perguntas</strong><small>Sem certo ou errado, no seu ritmo.</small></div></li>
+                <li><span>03</span><div><strong>Receber seu resultado</strong><small>Com contexto para a próxima conversa.</small></div></li>
+              </ol>
+            </aside>
+          </section>
+        </main>
+        <footer class="site-footer"><span>Dados de mercado da DeFiLlama · conteúdo informativo</span><span>Sem custódia · sem execução de ordens</span></footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

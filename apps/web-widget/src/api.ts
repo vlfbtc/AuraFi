@@ -50,6 +50,9 @@ export interface AuthSession {
 
 export const DEFAULT_PUBLIC_API_BASE_URL = 'https://aurafi-api.onrender.com';
 
+/** Single privacy policy version shared by the iOS app and the Web Widget. */
+export const PRIVACY_POLICY_VERSION = 'aurafi-privacy-2026-09';
+
 export interface RiskProfile {
   declaredProfile: ProfileLevel;
   status: 'declared' | 'missing';
@@ -206,6 +209,15 @@ export interface AlertListData {
   pagination: { page: number; pageSize: number; total: number; hasNext: boolean };
 }
 
+/** The account export exactly as the API returns it. The widget saves it to a
+ *  file without interpreting the fields. */
+export type AccountExport = Record<string, unknown>;
+
+export interface AccountDeletion {
+  status: 'deleted';
+  deletedAt: string;
+}
+
 export interface ApiClientOptions {
   baseUrl?: string;
   mode?: ApiMode;
@@ -350,6 +362,45 @@ const fixtureAlerts: Alert[] = [
 
 const PRIMARY_FIXTURE_ALERT = fixtureAlerts[0]!;
 
+const makeFixtureAccountExport = (context: RequestContext): AccountExport => {
+  const generatedAt = new Date().toISOString();
+  return {
+    export_version: '1.0',
+    generated_at: generatedAt,
+    account: {
+      account_id: fixtureProfile.account.accountId,
+      email: fixtureProfile.account.email,
+      email_verified: fixtureProfile.account.emailVerified,
+      created_at: FIXTURE_DATE,
+    },
+    consents: [{
+      purpose: 'conversation',
+      status: 'granted',
+      policy_version: PRIVACY_POLICY_VERSION,
+      captured_at: FIXTURE_DATE,
+      memory: false,
+      analytics: false,
+    }],
+    risk_profiles: [],
+    conversations: [],
+    simulations: [],
+    alerts: fixtureAlerts.map((alert) => ({
+      alert_id: alert.alertId,
+      type: alert.type,
+      title: alert.title,
+      status: alert.status,
+      created_at: alert.createdAt,
+    })),
+    sessions: [],
+    meta: {
+      request_id: context.requestId ?? `req_fixture_${Date.now()}`,
+      correlation_id: context.correlationId ?? `corr_fixture_${Date.now()}`,
+      generated_at: generatedAt,
+      disclaimer: FIXTURE_DISCLAIMER,
+    },
+  };
+};
+
 interface RawMeta {
   request_id?: string;
   correlation_id?: string;
@@ -479,6 +530,7 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
     if (path.startsWith('/v1/conversations')) return 30_000; // may carry an initial message
     if (path.startsWith('/v1/simulations')) return 20_000;
     if (path.startsWith('/v1/opportunities')) return 20_000; // live DeFiLlama read
+    if (path.startsWith('/v1/account')) return 30_000;       // gathers or erases every record of the account
     return 12_000;
   };
 
@@ -547,12 +599,15 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
 
   const shouldFallback = (error: unknown): boolean => error instanceof ApiClientError && (error.status === 0 || error.status >= 500);
 
-  const withFallback = async <T>(context: RequestContext, fixture: () => ApiResult<T>, apiCall: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> => {
+  // `fallback: false` keeps the fixture for fixture mode only. Account export and
+  // deletion must never answer an API failure with demo data: that would save a
+  // synthetic file as "your data" or report an account as erased when it is not.
+  const withFallback = async <T>(context: RequestContext, fixture: () => ApiResult<T>, apiCall: () => Promise<ApiResult<T>>, options: { fallback?: boolean } = {}): Promise<ApiResult<T>> => {
     if (mode === 'fixture') return fixture();
     try {
       return await apiCall();
     } catch (error) {
-      if (mode === 'api-with-fixture-fallback' && shouldFallback(error)) {
+      if (mode === 'api-with-fixture-fallback' && options.fallback !== false && shouldFallback(error)) {
         const reason = error instanceof Error ? error.message : 'Falha não identificada na API.';
         return fixtureResult(fixture().data, context, reason);
       }
@@ -668,6 +723,21 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
       () => fixtureResult({ ...(fixtureAlerts.find((alert) => alert.alertId === alertId) ?? PRIMARY_FIXTURE_ALERT), status: 'read' }, context),
       () => request('PATCH', `/v1/alerts/${encodeURIComponent(alertId)}`, context, { status: 'read' }, (value) => toAlert((value as { alert: RawAlert }).alert)),
     ),
+
+    exportAccount: (context: RequestContext = {}): Promise<ApiResult<AccountExport>> => withFallback(
+      context,
+      () => fixtureResult(makeFixtureAccountExport(context), context),
+      () => request('GET', '/v1/account/export', context, undefined, (value, _response, requested) => toAccountExport(value, requested)),
+      { fallback: false },
+    ),
+
+    /** Needs a fresh challenge from `requestOtp` for the session e-mail. */
+    deleteAccount: (challengeId: string, otp: string, context: RequestContext = {}): Promise<ApiResult<AccountDeletion>> => withFallback(
+      context,
+      () => fixtureResult<AccountDeletion>({ status: 'deleted', deletedAt: new Date().toISOString() }, context),
+      () => request('POST', '/v1/account/deletion', context, { challenge_id: challengeId, otp }, (value, _response, requested) => toAccountDeletion(value, requested)),
+      { fallback: false },
+    ),
   };
 
   return { ...methods, mode };
@@ -770,6 +840,27 @@ const toAlert = (raw: RawAlert): Alert => ({
   ...(raw.suggested_action ? { suggestedAction: raw.suggested_action } : {}),
   ...(raw.data_source ? { dataSource: toDataSource(raw.data_source) } : {}),
 });
+
+// A 200 whose body is not the expected JSON (a proxy page, a truncated reply)
+// must not become a downloaded "export" or a false "account deleted".
+const unexpectedResponse = (requested: RequestContext): ApiClientError => new ApiClientError(PUBLIC_API_ERROR_MESSAGE, {
+  status: 200,
+  code: 'UNEXPECTED_RESPONSE',
+  ...(requested.requestId ? { requestId: requested.requestId } : {}),
+  ...(requested.correlationId ? { correlationId: requested.correlationId } : {}),
+  retryable: true,
+});
+
+const toAccountExport = (value: unknown, requested: RequestContext): AccountExport => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw unexpectedResponse(requested);
+  return value as AccountExport;
+};
+
+const toAccountDeletion = (value: unknown, requested: RequestContext): AccountDeletion => {
+  const raw = value as { status?: unknown; deleted_at?: unknown } | undefined;
+  if (raw?.status !== 'deleted') throw unexpectedResponse(requested);
+  return { status: 'deleted', deletedAt: typeof raw.deleted_at === 'string' ? raw.deleted_at : new Date().toISOString() };
+};
 
 const toApiConsent = (consent: Consent) => ({
   purpose: consent.purpose,

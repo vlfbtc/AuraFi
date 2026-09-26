@@ -700,3 +700,82 @@ h1[tabindex='-1']:focus { border-radius: 8px; box-shadow: 0 0 0 4px rgba(237, 63
   .opportunity-metrics { grid-template-columns: 1fr; }
   .card-source-row { align-items: flex-start; flex-direction: column; gap: 7px; }
 }
+
+/* Consent, memory control, "Como usamos seus dados" and the privacy area. */
+a.brand-button { text-decoration: none; }
+.main-content.view-privacy { align-items: flex-start; }
+
+.consent-panel { margin: 0 auto; }
+.consent-list { display: grid; gap: 11px; list-style: none; margin: 0 0 24px; padding: 0; }
+.consent-list li { align-items: center; color: var(--ink); display: flex; font-size: 15px; gap: 12px; line-height: 1.45; }
+.consent-check { align-items: center; background: var(--mint-strong); border-radius: 50%; color: var(--accent-strong); display: inline-flex; flex: 0 0 auto; font-size: 12px; font-weight: 800; height: 24px; justify-content: center; width: 24px; }
+.memory-option { background: #f4ecf8; border: 1px solid var(--line); border-radius: 16px; margin-bottom: 26px; padding: 16px 18px; }
+.memory-option .card-kicker { margin: 0 0 12px; }
+.memory-option .field-hint { display: block; margin: 10px 0 0; }
+.consent-caption { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 12px 0 0; text-align: center; }
+.consent-panel .secondary-actions { margin-top: 14px; }
+
+/* A native checkbox (role="switch") laid over the track, so it stays
+   focusable, clickable and announced as on/off. Off uses --muted so the track
+   still reads at 6:1 against the light surfaces it sits on. */
+.switch-field { align-items: center; display: flex; gap: 12px; }
+.switch-control { display: block; flex: 0 0 auto; height: 28px; position: relative; width: 48px; }
+.switch-input { cursor: pointer; height: 100%; left: 0; margin: 0; opacity: 0; position: absolute; top: 0; width: 100%; z-index: 1; }
+.switch-track { background: var(--muted); border-radius: 999px; display: block; height: 100%; position: relative; transition: background 160ms ease; width: 100%; }
+.switch-track::after { background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(24, 11, 42, 0.3); content: ''; height: 22px; left: 3px; position: absolute; top: 3px; transition: transform 160ms ease; width: 22px; }
+.switch-input:checked + .switch-track { background: var(--coral-dark); }
+.switch-input:checked + .switch-track::after { transform: translateX(20px); }
+.switch-input:focus-visible + .switch-track { box-shadow: 0 0 0 3px #fffdf9, 0 0 0 6px var(--ink); }
+.switch-label { color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 700; line-height: 1.35; }
+
+.hub-status { flex-wrap: wrap; }
+.hub-status-text { flex: 1 1 260px; }
+.hub-status .switch-field { margin-left: auto; }
+/* `.hub-status span` above styles the status copy; keep it off the switch. */
+.hub-status .switch-control, .hub-status .switch-track { margin-top: 0; }
+.hub-status .switch-label { color: #3a164f; font-size: 13px; }
+.memory-notice { color: var(--muted-strong); font-size: 13px; line-height: 1.45; margin: -8px 0 16px; }
+.memory-notice:empty { margin: 0; }
+
+.data-use-list { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); list-style: none; margin: 0; padding: 0; }
+.data-use-list li { border-top: 2px solid var(--coral); display: flex; gap: 12px; padding: 14px 4px 4px; }
+.data-use-list .education-number { flex: 0 0 auto; padding-top: 3px; }
+.data-use-list p { color: var(--ink); font-size: 15px; line-height: 1.5; margin: 0; }
+
+.welcome-notice { flex-direction: column; gap: 4px; margin: 0 0 28px; max-width: 560px; }
+
+.privacy-panel { margin: 0 auto; width: min(980px, 100%); }
+.privacy-panel > .back-button { margin-bottom: 22px; }
+.privacy-heading h1 { font-size: clamp(38px, 5vw, 62px); max-width: 760px; }
+.privacy-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 6px; }
+.privacy-card { align-items: flex-start; display: flex; flex-direction: column; }
+.privacy-card h2 { margin-bottom: 12px; }
+/* Two lines reserved so both cards' buttons line up, whatever shows below them. */
+.privacy-card .detail-note { margin: 0 0 18px; min-height: 3em; }
+.privacy-card .inline-alert { width: 100%; }
+.privacy-status { color: #176b48; font-size: 13px; line-height: 1.45; margin: 12px 0 0; }
+.privacy-status:empty { margin: 0; }
+
+/* Destructive surfaces reuse the inline-alert reds; the button's #b3261e holds
+   6.5:1 under white text. */
+.danger-zone { background: #fff6f3; border: 1px solid #f1c0b3; border-radius: 18px; margin-top: 18px; padding: 22px; }
+.danger-zone .eyebrow { margin-bottom: 8px; }
+.danger-zone h2 { font-family: 'Segoe UI', Arial, sans-serif; font-size: 18px; letter-spacing: 0; margin-bottom: 12px; }
+.danger-copy { color: #564765; font-size: 14px; line-height: 1.55; margin: 0 0 18px; max-width: 640px; }
+.danger-warning { color: #7f3627; font-size: 15px; font-weight: 600; line-height: 1.5; margin: 0 0 18px; max-width: 660px; }
+.danger-button { align-items: center; background: #b3261e; border: 0; border-radius: 999px; box-shadow: 0 8px 20px rgba(179, 38, 30, 0.18); color: #fff; display: inline-flex; font-size: 15px; font-weight: 700; justify-content: center; min-height: 48px; padding: 12px 21px; transition: background 160ms ease; }
+.danger-button:hover { background: #8f1d17; }
+.deletion-step .field-group { max-width: 380px; }
+.deletion-step .inline-alert { max-width: 660px; }
+.deletion-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 18px; }
+
+@media (max-width: 760px) {
+  .privacy-grid, .data-use-list { grid-template-columns: 1fr; }
+  .privacy-card .detail-note { min-height: 0; }
+  .hub-status .switch-field { margin-left: 0; }
+}
+
+@media (max-width: 440px) {
+  .danger-button { width: 100%; }
+  .deletion-actions { align-items: stretch; flex-direction: column; gap: 6px; }
+}

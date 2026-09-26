@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ApiClientError, createWidgetApi, widgetApi } from './api';
-import type { Alert as ApiAlert, AlertType, ApiMeta, AuthSession, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
+import { ApiClientError, PRIVACY_POLICY_VERSION, createWidgetApi, widgetApi } from './api';
+import type { Alert as ApiAlert, AlertType, ApiMeta, AuthSession, Consent, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
 
-type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub' | 'alerts';
+type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub' | 'alerts' | 'privacy';
 type ProfileLevel = 'conservative' | 'moderate' | 'aggressive';
 type ErrorKind = 'empty' | 'invalid' | 'network' | null;
 type ErrorContext = 'email' | 'otp' | 'quiz' | 'profile' | 'simulation';
@@ -14,6 +14,8 @@ type SimulationState = 'idle' | 'loading' | 'ready' | 'error';
 type SimulationErrorField = 'amount' | 'horizons' | null;
 type DecisionStatus = 'accepted' | 'refused';
 type DecisionFilter = 'all' | DecisionStatus;
+type ConversationErrorKind = 'start' | 'restore' | 'send' | 'consent';
+type DeletionStep = 'idle' | 'confirm' | 'code';
 
 interface QuestionOption {
   value: string;
@@ -309,6 +311,27 @@ const DECISION_HISTORY_KEY = 'aurafi-widget-decision-history-v1';
 const SAVED_PLANS_KEY = 'aurafi-widget-saved-plans-v1';
 const AUTH_SESSION_KEY = 'aurafi-widget-auth-session-v1';
 const CONVERSATION_KEY = 'aurafi-widget-conversation-v1';
+const CONVERSATION_CONSENT_KEY = 'aurafi-widget-conversation-consent-v1';
+/** Every key this app writes to sessionStorage or localStorage starts with it. */
+const STORAGE_KEY_PREFIX = 'aurafi-widget-';
+
+const CONSENT_ITEMS: readonly string[] = [
+  'Métricas de uso ficam desativadas',
+  'Você pode sair da conversa quando quiser',
+  'Nenhuma transação pode ser executada',
+];
+const MEMORY_LABEL = 'Lembrar o contexto desta conversa';
+const MEMORY_HELP = 'A Aura usa as mensagens anteriores desta conversa para responder. Você pode desligar quando quiser.';
+const DATA_USE_ITEMS: readonly string[] = [
+  'O código enviado por e-mail confirma que o e-mail é seu.',
+  'Suas mensagens só vão para a Aura depois que você concorda.',
+  'A memória da conversa só é usada se você ativar.',
+  'Sua sessão fica guardada apenas nesta aba do navegador.',
+  'Você pode baixar seus dados ou apagar sua conta quando quiser.',
+  'A AuraFi nunca pede seed phrase, senha ou chave privada.',
+];
+const DELETION_WARNING = 'Isso apaga sua conta, seu perfil de risco, suas conversas, simulações e alertas. A ação não pode ser desfeita.';
+const ACCOUNT_DELETED_MESSAGE = 'Sua conta e seus dados foram apagados.';
 
 function readSession(): AuthSession | null {
   if (typeof window === 'undefined') return null;
@@ -319,6 +342,7 @@ function readSession(): AuthSession | null {
     if (!value.accessToken || !value.refreshToken || !value.expiresAt || !Number.isFinite(Date.parse(value.expiresAt))) {
       window.sessionStorage.removeItem(AUTH_SESSION_KEY);
       window.sessionStorage.removeItem(CONVERSATION_KEY);
+      window.sessionStorage.removeItem(CONVERSATION_CONSENT_KEY);
       return null;
     }
     return value;
@@ -333,7 +357,104 @@ function saveSession(value: AuthSession | null): void {
   else {
     window.sessionStorage.removeItem(AUTH_SESSION_KEY);
     window.sessionStorage.removeItem(CONVERSATION_KEY);
+    window.sessionStorage.removeItem(CONVERSATION_CONSENT_KEY);
   }
+}
+
+function makeConversationConsent(memory: boolean, capturedAt: string = new Date().toISOString()): Consent {
+  return {
+    purpose: 'conversation',
+    status: 'granted',
+    policyVersion: PRIVACY_POLICY_VERSION,
+    capturedAt,
+    memory,
+    analytics: false,
+  };
+}
+
+/** Consent given earlier in this tab, so a restored conversation carries on
+ *  without asking again. A conversation stored without it predates the consent
+ *  screen (the widget used to grant consent, memory included, on the user's
+ *  behalf), so it is dropped rather than resumed: messages only reach the Aura
+ *  after an explicit agreement. */
+function readConversationConsent(): Consent | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(CONVERSATION_CONSENT_KEY);
+    const value = raw ? JSON.parse(raw) as Partial<Consent> : null;
+    if (value && value.status === 'granted' && value.policyVersion === PRIVACY_POLICY_VERSION && typeof value.memory === 'boolean' && typeof value.capturedAt === 'string') {
+      return makeConversationConsent(value.memory, value.capturedAt);
+    }
+    window.sessionStorage.removeItem(CONVERSATION_KEY);
+    window.sessionStorage.removeItem(CONVERSATION_CONSENT_KEY);
+  } catch {
+  }
+  return null;
+}
+
+function saveConversationConsent(value: Consent | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value) window.sessionStorage.setItem(CONVERSATION_CONSENT_KEY, JSON.stringify(value));
+    else window.sessionStorage.removeItem(CONVERSATION_CONSENT_KEY);
+  } catch {
+  }
+}
+
+function saveConversationId(conversationId: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (conversationId) window.sessionStorage.setItem(CONVERSATION_KEY, conversationId);
+    else window.sessionStorage.removeItem(CONVERSATION_KEY);
+  } catch {
+  }
+}
+
+/** Removes everything the widget keeps in this browser: session, conversation,
+ *  consent, saved plans and decision history. */
+function clearAllLocalData(): void {
+  if (typeof window === 'undefined') return;
+  const storages: ReadonlyArray<() => Storage> = [() => window.sessionStorage, () => window.localStorage];
+  storages.forEach((getStorage) => {
+    try {
+      const storage = getStorage();
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+        .filter((key): key is string => key !== null && key.startsWith(STORAGE_KEY_PREFIX));
+      keys.forEach((key) => storage.removeItem(key));
+    } catch {
+    }
+  });
+}
+
+function localDateStamp(date: Date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function downloadJsonFile(data: unknown, fileName: string): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoked late on purpose: Safari can still be reading the blob after click().
+  window.setTimeout(() => URL.revokeObjectURL(url), 40_000);
+}
+
+function accountDeletionErrorMessage(error: unknown, session: AuthSession | null): string {
+  if (error instanceof ApiClientError) {
+    if (error.status === 401) {
+      const sessionExpired = !session || Date.parse(session.expiresAt) <= Date.now() || /SESSION|TOKEN/.test(error.code);
+      return sessionExpired ? 'Sua sessão expirou. Entre novamente para apagar sua conta.' : 'Código inválido ou expirado.';
+    }
+    if (error.status === 429) return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+    if (error.status === 400) return 'Confira o código de seis números e tente novamente.';
+  }
+  return 'Não foi possível concluir agora. Verifique sua conexão e tente novamente.';
 }
 
 function messageText(message: MessageEnvelope): string {
@@ -365,7 +486,9 @@ function readLocalArray<T>(key: string): T[] {
 function writeLocalArray<T>(key: string, value: readonly T[]): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    // An empty list leaves no key behind, so clearing local data really clears it.
+    if (value.length === 0) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
   }
 }
@@ -479,16 +602,91 @@ function AuraMark() {
   );
 }
 
-function InlineAlert({ message, onRetry, id }: { message: string; onRetry?: () => void; id?: string }) {
+function InlineAlert({ message, onRetry, actionLabel = 'Tentar novamente', id }: { message: string; onRetry?: () => void; actionLabel?: string; id?: string }) {
   return (
     <div id={id} className="inline-alert" role="alert">
       <span className="alert-icon" aria-hidden="true">!</span>
       <p>{message}</p>
       {onRetry ? (
         <button className="text-button alert-retry" type="button" onClick={onRetry}>
-          Tentar novamente
+          {actionLabel}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+/** Modal dialog: focus starts on its first control, Tab stays inside, Escape
+ *  closes it, and focus returns to whatever opened it. */
+function Dialog({ className, labelledBy, describedBy, onClose, children }: {
+  className: string;
+  labelledBy: string;
+  describedBy: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableElements = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])
+      .filter((element) => !element.hasAttribute('disabled'));
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    focusableElements()[0]?.focus();
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      trigger?.focus();
+    };
+  }, []);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section ref={dialogRef} className={className} role="dialog" aria-modal="true" aria-labelledby={labelledBy} aria-describedby={describedBy}>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+/** The "remember this conversation" control, as an on/off switch. */
+function MemorySwitch({ id, checked, onChange, describedBy }: { id: string; checked: boolean; onChange: (checked: boolean) => void; describedBy: string }) {
+  return (
+    <div className="switch-field">
+      <span className="switch-control">
+        <input id={id} className="switch-input" type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-describedby={describedBy} />
+        <span className="switch-track" aria-hidden="true" />
+      </span>
+      <label className="switch-label" htmlFor={id}>{MEMORY_LABEL}</label>
     </div>
   );
 }
@@ -560,15 +758,37 @@ export default function App() {
   const [conversationDraft, setConversationDraft] = useState('');
   const [conversationState, setConversationState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [conversationError, setConversationError] = useState<string | null>(null);
+  const [conversationErrorKind, setConversationErrorKind] = useState<ConversationErrorKind>('start');
+  // Consent is asked once per tab session; a restored conversation reuses it.
+  const [conversationConsent, setConversationConsent] = useState<Consent | null>(() => restoredSession ? readConversationConsent() : null);
+  const [memoryChoice, setMemoryChoice] = useState(false);
+  const [memoryNotice, setMemoryNotice] = useState('');
+  const [isDataUseOpen, setIsDataUseOpen] = useState(false);
+  const [exportState, setExportState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [exportMessage, setExportMessage] = useState('');
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [deletionStep, setDeletionStep] = useState<DeletionStep>('idle');
+  const [deletionChallenge, setDeletionChallenge] = useState<OtpChallenge | null>(null);
+  const [deletionCode, setDeletionCode] = useState('');
+  const [deletionBusy, setDeletionBusy] = useState<'sending' | 'deleting' | null>(null);
+  const [deletionError, setDeletionError] = useState<string | null>(null);
+  const [deletionNotice, setDeletionNotice] = useState('');
+  const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
+  const [appAnnouncement, setAppAnnouncement] = useState('');
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const educationCloseRef = useRef<HTMLButtonElement>(null);
-  const educationModalRef = useRef<HTMLElement>(null);
-  const educationTriggerRef = useRef<HTMLElement | null>(null);
   const conversationLogRef = useRef<HTMLDivElement>(null);
+  const deletionStartRef = useRef<HTMLButtonElement>(null);
+  const deletionConfirmRef = useRef<HTMLButtonElement>(null);
+  const deletionCodeRef = useRef<HTMLInputElement>(null);
+  const deletionFocusPending = useRef(false);
+  // Bumped whenever the deletion flow is cancelled or reset, so a code request
+  // that answers afterwards cannot reopen a step the user already left.
+  const deletionAttempt = useRef(0);
   const apiClient = useMemo(
     () => accessToken ? createWidgetApi({ token: accessToken }) : widgetApi,
     [accessToken],
   );
+  const hasConversationConsent = conversationConsent !== null;
 
   const clearAuthenticatedState = () => {
     saveSession(null);
@@ -578,6 +798,9 @@ export default function App() {
     setConversationDraft('');
     setConversationState('idle');
     setConversationError(null);
+    setConversationConsent(null);
+    setMemoryChoice(false);
+    setMemoryNotice('');
   };
 
   const currentQuestion = questions[currentQuestionIndex];
@@ -596,9 +819,24 @@ export default function App() {
     [dashboardOpportunities, opportunityFilter],
   );
 
+  // Granting consent swaps the hub's consent screen for the chat, so the
+  // heading takes focus then too, as it does on every view change.
   useEffect(() => {
     headingRef.current?.focus();
-  }, [view, currentQuestionIndex]);
+  }, [view, currentQuestionIndex, hasConversationConsent]);
+
+  // Each step of the account deletion flow moves focus to the control that
+  // continues it, but only when the user moved the flow (not on first render).
+  useEffect(() => {
+    if (!deletionFocusPending.current) return;
+    deletionFocusPending.current = false;
+    const target = deletionStep === 'confirm'
+      ? deletionConfirmRef.current
+      : deletionStep === 'code'
+        ? deletionCodeRef.current
+        : deletionStartRef.current;
+    target?.focus();
+  }, [deletionStep]);
 
   // Keep the newest message in view, including the "Aura está organizando"
   // indicator while the reply is in flight.
@@ -665,6 +903,7 @@ export default function App() {
         setView('email');
       }
       setConversationState('error');
+      setConversationErrorKind('restore');
       setConversationError('Não foi possível retomar a conversa. Você pode iniciar uma nova conversa com segurança.');
     });
   }, [accessToken, apiClient]);
@@ -734,51 +973,12 @@ export default function App() {
     });
   };
 
-  useEffect(() => {
-    if (!isEducationOpen) return undefined;
-
-    educationTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsEducationOpen(false);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-
-      const modal = educationModalRef.current;
-      if (!modal) return;
-      const focusable = Array.from(modal.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )).filter((element) => !element.hasAttribute('disabled'));
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    educationCloseRef.current?.focus();
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      educationTriggerRef.current?.focus();
-      educationTriggerRef.current = null;
-    };
-  }, [isEducationOpen]);
-
   const clearError = () => setErrorKind(null);
 
   const startOnboarding = () => {
     clearError();
+    setWelcomeNotice(null);
+    setAppAnnouncement('');
     setView('email');
   };
 
@@ -1088,6 +1288,11 @@ export default function App() {
     setDecisionError(null);
     setDecisionMessage(null);
     setIsEducationOpen(false);
+    setIsDataUseOpen(false);
+    setAlertItems([]);
+    resetPrivacyFlows();
+    setWelcomeNotice(null);
+    setAppAnnouncement('');
     clearError();
   };
 
@@ -1102,34 +1307,59 @@ export default function App() {
     }
   };
 
-  const openHub = async () => {
-    setView('hub');
-    setConversationError(null);
-    if (conversation) return;
+  const startConversation = async (consent: Consent) => {
     setConversationState('loading');
+    setConversationError(null);
     try {
-      const result = await apiClient.createConversation({
-        consent: {
-          purpose: 'conversation',
-          status: 'granted',
-          policyVersion: 'aurafi-privacy-2026-08',
-          memory: true,
-          analytics: false,
-        },
-      });
+      const result = await apiClient.createConversation({ consent });
       setConversation(result.data);
-      window.sessionStorage.setItem(CONVERSATION_KEY, result.data.conversationId);
+      saveConversationId(result.data.conversationId);
       setConversationState('ready');
     } catch {
       setConversationState('error');
+      setConversationErrorKind('start');
       setConversationError('A Aura está em manutenção rápida. O catálogo continua disponível e você pode tentar novamente.');
     }
   };
 
-  const sendHubMessage = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const text = conversationDraft.trim();
-    if (!text || !conversation) return;
+  // Without consent the hub opens on the consent screen and nothing is sent.
+  const openHub = () => {
+    setView('hub');
+    setConversationError(null);
+    if (conversation || !conversationConsent || conversationState === 'loading') return;
+    void startConversation(conversationConsent);
+  };
+
+  const startNewConversation = () => {
+    if (!conversationConsent) return;
+    setConversation(null);
+    saveConversationId(null);
+    void startConversation(conversationConsent);
+  };
+
+  const handleGrantConsent = () => {
+    const consent = makeConversationConsent(memoryChoice);
+    setConversationConsent(consent);
+    saveConversationConsent(consent);
+    setMemoryNotice('');
+    void startConversation(consent);
+  };
+
+  // Turning memory off is a revocation and turning it back on a new grant, so
+  // either one is recorded with its own capture time. The next message carries it.
+  const handleMemoryChange = (memory: boolean) => {
+    if (!conversationConsent || conversationConsent.memory === memory) return;
+    const consent = makeConversationConsent(memory);
+    setConversationConsent(consent);
+    saveConversationConsent(consent);
+    setMemoryNotice(memory
+      ? 'Memória ligada. A Aura vai usar as mensagens anteriores desta conversa nas próximas respostas.'
+      : 'Memória desligada. As próximas mensagens não usam o contexto anterior da conversa.');
+  };
+
+  const deliverHubMessage = async (text: string) => {
+    if (!text || !conversation || !conversationConsent || conversationState === 'loading') return;
+    const consent = conversationConsent;
     // Show the message straight away and clear the box. The model round trip
     // runs about ten seconds; without this the composer just sat there full
     // and the sent message was invisible until the reply landed.
@@ -1151,13 +1381,7 @@ export default function App() {
     try {
       const result = await apiClient.sendConversationMessage(conversation.conversationId, {
         text,
-        consent: {
-          purpose: 'conversation',
-          status: 'granted',
-          policyVersion: 'aurafi-privacy-2026-08',
-          memory: true,
-          analytics: false,
-        },
+        consent,
       }, conversation.messages.at(-1)?.correlationId
         ? { correlationId: conversation.messages.at(-1)!.correlationId }
         : {});
@@ -1169,19 +1393,166 @@ export default function App() {
         messages: [...current.messages.filter((m) => m.messageId !== pendingId), ...result.data.messages],
       } : result.data);
       setConversationState('ready');
-    } catch {
+    } catch (error) {
       setConversation((current) => (current
         ? { ...current, messages: current.messages.filter((m) => m.messageId !== pendingId) }
         : current));
       setConversationDraft(text);
       setConversationState('error');
-      setConversationError('Não consegui responder agora. Sua mensagem voltou para a caixa de texto; tente enviar novamente.');
+      if (error instanceof ApiClientError && error.code === 'CONSENT_REQUIRED') {
+        // The API refused the consent this message carried for this
+        // conversation (for example a memory change it does not accept here).
+        setConversationErrorKind('consent');
+        setConversationError('Não foi possível aplicar sua preferência de memória nesta conversa. Inicie uma nova conversa para continuar; sua mensagem voltou para a caixa de texto.');
+      } else {
+        setConversationErrorKind('send');
+        setConversationError('Não consegui responder agora. Sua mensagem voltou para a caixa de texto; tente enviar novamente.');
+      }
+    }
+  };
+
+  const sendHubMessage = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void deliverHubMessage(conversationDraft.trim());
+  };
+
+  const resetPrivacyFlows = () => {
+    deletionAttempt.current += 1;
+    setExportState('idle');
+    setExportMessage('');
+    setExportError(null);
+    setDeletionStep('idle');
+    setDeletionChallenge(null);
+    setDeletionCode('');
+    setDeletionBusy(null);
+    setDeletionError(null);
+    setDeletionNotice('');
+  };
+
+  const openPrivacy = () => {
+    setIsEducationOpen(false);
+    resetPrivacyFlows();
+    setView('privacy');
+  };
+
+  const handleExportData = async () => {
+    setExportState('loading');
+    setExportError(null);
+    setExportMessage('');
+    try {
+      const result = await apiClient.exportAccount({ requestId: `widget_account_export_${Date.now()}` });
+      const fileName = `aurafi-meus-dados-${localDateStamp()}.json`;
+      downloadJsonFile(result.data, fileName);
+      setExportState('idle');
+      setExportMessage(`Pronto. O arquivo ${fileName} foi baixado.`);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status === 401) {
+        clearAuthenticatedState();
+        setView('email');
+        return;
+      }
+      setExportState('error');
+      setExportError(error instanceof ApiClientError && error.status === 429
+        ? 'Você já baixou seus dados várias vezes na última hora. Tente novamente mais tarde.'
+        : 'Não foi possível preparar seus dados agora. Verifique sua conexão e tente novamente.');
+    }
+  };
+
+  const moveDeletionStep = (step: DeletionStep) => {
+    deletionFocusPending.current = true;
+    setDeletionStep(step);
+    setDeletionError(null);
+    setDeletionNotice('');
+  };
+
+  const cancelDeletion = () => {
+    deletionAttempt.current += 1;
+    setDeletionBusy(null);
+    setDeletionChallenge(null);
+    setDeletionCode('');
+    moveDeletionStep('idle');
+  };
+
+  // Step 1 of the deletion: a code sent to the session e-mail, through the same
+  // endpoint as the sign-in. It needs no token, so none is sent.
+  const handleRequestDeletionCode = async () => {
+    const sessionEmail = authSession?.email;
+    if (!sessionEmail) {
+      setDeletionError('Sua sessão expirou. Entre novamente para apagar sua conta.');
+      return;
+    }
+    const attempt = deletionAttempt.current;
+    setDeletionBusy('sending');
+    setDeletionError(null);
+    setDeletionNotice('');
+    try {
+      const nextChallenge = (await widgetApi.requestOtp(sessionEmail, { requestId: `widget_deletion_otp_${Date.now()}` })).data;
+      if (attempt !== deletionAttempt.current) return;
+      setDeletionChallenge({ challengeId: nextChallenge.challengeId, expiresAt: nextChallenge.expiresAt });
+      setDeletionCode('');
+      if (deletionStep === 'code') {
+        setDeletionNotice('Enviamos um novo código para o seu e-mail.');
+        deletionCodeRef.current?.focus();
+      } else {
+        moveDeletionStep('code');
+      }
+    } catch (error) {
+      if (attempt !== deletionAttempt.current) return;
+      setDeletionError(error instanceof ApiClientError && error.status === 429
+        ? 'Muitas tentativas. Aguarde alguns minutos e tente novamente.'
+        : 'Não foi possível enviar o código agora. Verifique sua conexão e tente novamente.');
+    } finally {
+      if (attempt === deletionAttempt.current) setDeletionBusy(null);
+    }
+  };
+
+  const completeAccountDeletion = () => {
+    clearAllLocalData();
+    setSavedPlans([]);
+    setDecisionHistory([]);
+    restart();
+    setWelcomeNotice(ACCOUNT_DELETED_MESSAGE);
+    setAppAnnouncement(ACCOUNT_DELETED_MESSAGE);
+  };
+
+  const handleDeleteAccount = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (deletionBusy) return;
+    if (!/^\d{6}$/.test(deletionCode)) {
+      setDeletionError('Digite o código de seis números que enviamos.');
+      deletionCodeRef.current?.focus();
+      return;
+    }
+    if (!deletionChallenge) {
+      setDeletionError('Peça um novo código para continuar.');
+      return;
+    }
+    const attempt = deletionAttempt.current;
+    setDeletionBusy('deleting');
+    setDeletionError(null);
+    setDeletionNotice('');
+    try {
+      await apiClient.deleteAccount(deletionChallenge.challengeId, deletionCode, { requestId: `widget_account_deletion_${Date.now()}` });
+      // Always, even if the user left this screen meanwhile: the account is gone.
+      completeAccountDeletion();
+    } catch (error) {
+      if (attempt !== deletionAttempt.current) return;
+      setDeletionBusy(null);
+      setDeletionError(accountDeletionErrorMessage(error, authSession));
+      deletionCodeRef.current?.focus();
     }
   };
 
   const renderWelcome = () => (
     <section className="welcome-grid" aria-labelledby="welcome-title">
       <div className="welcome-copy">
+        {/* Announced through the app-level live region; this box is the visible copy. */}
+        {welcomeNotice ? (
+          <div className="simulation-notice welcome-notice">
+            <strong>Conta apagada</strong>
+            <span>{welcomeNotice}</span>
+          </div>
+        ) : null}
         <p className="eyebrow">AuraFi · Clareza para investir</p>
         <h1 id="welcome-title" ref={headingRef} tabIndex={-1}>Onde colocar suas stablecoins em 2026.</h1>
         <p className="lead">Uma conversa clara para estudar oportunidades DeFi, declarar seu perfil e entender os próximos passos antes de decidir.</p>
@@ -1366,9 +1737,10 @@ export default function App() {
             <p className="lead compact">Oportunidades de mercado para comparar dados, riscos e explicações antes de qualquer próxima etapa.</p>
           </div>
           <div className="dashboard-actions">
-            <button className="primary-button" type="button" onClick={() => { void openHub(); }}>Conversar com a Aura <span aria-hidden="true">→</span></button>
+            <button className="primary-button" type="button" onClick={openHub}>Conversar com a Aura <span aria-hidden="true">→</span></button>
             <button className="secondary-button" type="button" onClick={() => setIsEducationOpen(true)}>Como ler este painel</button>
             <button className="back-button" type="button" onClick={() => setView('result')}>← Ver meu resultado</button>
+            <button className="text-button" type="button" onClick={openPrivacy}>Privacidade e dados</button>
           </div>
         </div>
 
@@ -1594,65 +1966,195 @@ export default function App() {
     );
   };
 
-  const renderHub = () => (
-    <section className="hub-panel" aria-labelledby="hub-title">
-      <div className="hub-heading">
-        <div>
-          <p className="eyebrow">Aura · Hub conversacional</p>
-          <h1 id="hub-title" ref={headingRef} tabIndex={-1}>Converse com a mesma Aura, em qualquer canal.</h1>
-          <p className="lead compact">Seu contexto fica associado à sua conta. Aqui você pode pedir explicações, comparar riscos e retomar esta conversa durante a sessão.</p>
-        </div>
+  const renderConsent = () => (
+    <section className="narrow-panel consent-panel" aria-labelledby="consent-title" aria-describedby="consent-description">
+      <p className="eyebrow">Aura · Hub conversacional</p>
+      <h1 id="consent-title" ref={headingRef} tabIndex={-1}>Converse com a Aura</h1>
+      <p id="consent-description" className="lead compact">Suas mensagens serão enviadas ao hub conversacional para produzir respostas educativas. Não envie senhas, códigos, seed phrases ou chaves privadas.</p>
+      <ul className="consent-list">
+        {CONSENT_ITEMS.map((item) => (
+          <li key={item}><span className="consent-check" aria-hidden="true">✓</span>{item}</li>
+        ))}
+      </ul>
+      <div className="memory-option">
+        <p className="card-kicker">Opcional</p>
+        <MemorySwitch id="consent-memory" checked={memoryChoice} onChange={setMemoryChoice} describedBy="consent-memory-help" />
+        <p id="consent-memory-help" className="field-hint">{MEMORY_HELP}</p>
+      </div>
+      <button className="primary-button full-width" type="button" onClick={handleGrantConsent}>
+        Concordar e iniciar conversa <span aria-hidden="true">→</span>
+      </button>
+      <p className="consent-caption">Ao continuar, você concorda apenas com o uso necessário para esta conversa.</p>
+      <div className="secondary-actions">
+        <button className="text-button" type="button" onClick={() => setIsDataUseOpen(true)}>Como usamos seus dados</button>
         <button className="back-button" type="button" onClick={openDashboard}>← Voltar ao painel</button>
       </div>
-
-      <div className="hub-status" role="status">
-        <span className={`source-indicator ${conversationState === 'error' ? 'source-fallback' : 'source-live'}`} aria-hidden="true" />
-        <div><strong>{conversationState === 'error' ? 'Fallback disponível' : 'Contexto conectado'}</strong><span>Conta autenticada · memória desta conversa ativa · analytics desativado</span></div>
-      </div>
-
-      {conversationError ? <InlineAlert message={conversationError} onRetry={() => { setConversation(null); void openHub(); }} /> : null}
-
-      <div className="conversation-log" ref={conversationLogRef} role="log" aria-live="polite" aria-relevant="additions text">
-        {!conversation || conversation.messages.length === 0 ? (
-          <div className="hub-empty">
-            <span className="aura-avatar" aria-hidden="true">A</span>
-            <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, os riscos informados e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
-          </div>
-        ) : conversation.messages.map((message) => (
-          <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}${message.messageId.startsWith('pending_') ? ' is-pending' : ''}`} key={message.messageId}>
-            <span className="message-author">{message.messageType === 'user_message' ? 'Você' : 'Aura'}</span>
-            <p>{renderMessageText(messageText(message))}</p>
-            <time dateTime={message.occurredAt}>{message.messageId.startsWith('pending_') ? 'enviando…' : formatDateTime(message.occurredAt)}</time>
-          </article>
-        ))}
-        {conversationState === 'loading' ? <div className="chat-thinking" role="status"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /> <em>Aura está organizando a resposta…</em></div> : null}
-      </div>
-
-      {conversation ? (
-        <form className="hub-composer" onSubmit={sendHubMessage}>
-          <label className="sr-only" htmlFor="hub-message">Mensagem para a Aura</label>
-          <textarea
-            id="hub-message"
-            rows={2}
-            maxLength={2000}
-            value={conversationDraft}
-            onChange={(event) => setConversationDraft(event.target.value)}
-            onKeyDown={(event) => {
-              // Enter sends, Shift+Enter breaks the line, as in any chat.
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Pergunte sobre APY, risco ou uma oportunidade…"
-            disabled={conversationState === 'loading'}
-          />
-          <button className="primary-button" type="submit" disabled={conversationState === 'loading' || !conversationDraft.trim()}>Enviar <span aria-hidden="true">→</span></button>
-        </form>
-      ) : conversationState !== 'loading' ? <button className="primary-button" type="button" onClick={() => { void openHub(); }}>Iniciar nova conversa</button> : null}
-      <p className="disclaimer"><strong>Privacidade e limites:</strong> a conversa usa consentimento explícito, não habilita analytics e não acessa wallet, saldo ou conta bancária. Não compartilhe senhas, OTP ou chaves.</p>
     </section>
   );
+
+  const renderHub = () => {
+    if (!conversationConsent) return renderConsent();
+    const isMemoryOn = conversationConsent.memory === true;
+    const conversationAlertAction = conversationErrorKind === 'send'
+      ? { onRetry: () => { void deliverHubMessage(conversationDraft.trim()); } }
+      : conversationErrorKind === 'start'
+        ? { onRetry: startNewConversation }
+        : { onRetry: startNewConversation, actionLabel: 'Iniciar nova conversa' };
+    return (
+      <section className="hub-panel" aria-labelledby="hub-title">
+        <div className="hub-heading">
+          <div>
+            <p className="eyebrow">Aura · Hub conversacional</p>
+            <h1 id="hub-title" ref={headingRef} tabIndex={-1}>Converse com a mesma Aura, em qualquer canal.</h1>
+            <p className="lead compact">Peça explicações, compare riscos e retome esta conversa durante a sessão. Você escolhe se a Aura lembra o contexto.</p>
+          </div>
+          <button className="back-button" type="button" onClick={openDashboard}>← Voltar ao painel</button>
+        </div>
+
+        <div className="hub-status">
+          <span className={`source-indicator ${conversationState === 'error' ? 'source-fallback' : 'source-live'}`} aria-hidden="true" />
+          <div className="hub-status-text"><strong>{conversationState === 'error' ? 'Fallback disponível' : 'Contexto conectado'}</strong><span>Conta autenticada · memória {isMemoryOn ? 'ligada' : 'desligada'} · métricas de uso desativadas</span></div>
+          <MemorySwitch id="hub-memory" checked={isMemoryOn} onChange={handleMemoryChange} describedBy="hub-memory-help" />
+        </div>
+        <p id="hub-memory-help" className="sr-only">{MEMORY_HELP}</p>
+        <p className="memory-notice" role="status">{memoryNotice}</p>
+
+        {conversationError ? <InlineAlert message={conversationError} {...conversationAlertAction} /> : null}
+
+        <div className="conversation-log" ref={conversationLogRef} role="log" aria-live="polite" aria-relevant="additions text">
+          {!conversation || conversation.messages.length === 0 ? (
+            <div className="hub-empty">
+              <span className="aura-avatar" aria-hidden="true">A</span>
+              <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, os riscos informados e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
+            </div>
+          ) : conversation.messages.map((message) => (
+            <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}${message.messageId.startsWith('pending_') ? ' is-pending' : ''}`} key={message.messageId}>
+              <span className="message-author">{message.messageType === 'user_message' ? 'Você' : 'Aura'}</span>
+              <p>{renderMessageText(messageText(message))}</p>
+              <time dateTime={message.occurredAt}>{message.messageId.startsWith('pending_') ? 'enviando…' : formatDateTime(message.occurredAt)}</time>
+            </article>
+          ))}
+          {conversationState === 'loading' ? <div className="chat-thinking" role="status"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /> <em>Aura está organizando a resposta…</em></div> : null}
+        </div>
+
+        {conversation ? (
+          <form className="hub-composer" onSubmit={sendHubMessage}>
+            <label className="sr-only" htmlFor="hub-message">Mensagem para a Aura</label>
+            <textarea
+              id="hub-message"
+              rows={2}
+              maxLength={2000}
+              value={conversationDraft}
+              onChange={(event) => setConversationDraft(event.target.value)}
+              onKeyDown={(event) => {
+                // Enter sends, Shift+Enter breaks the line, as in any chat.
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Pergunte sobre APY, risco ou uma oportunidade…"
+              disabled={conversationState === 'loading'}
+            />
+            <button className="primary-button" type="submit" disabled={conversationState === 'loading' || !conversationDraft.trim()}>Enviar <span aria-hidden="true">→</span></button>
+          </form>
+        ) : conversationState !== 'loading' ? <button className="primary-button" type="button" onClick={startNewConversation}>Iniciar nova conversa</button> : null}
+        <p className="disclaimer"><strong>Privacidade e limites:</strong> a conversa usa consentimento explícito, não habilita analytics e não acessa wallet, saldo ou conta bancária. Não compartilhe senhas, OTP ou chaves.</p>
+      </section>
+    );
+  };
+
+  const renderPrivacy = () => {
+    const sessionEmail = authSession?.email ?? email;
+    const isDeleting = deletionBusy === 'deleting';
+    return (
+      <section className="privacy-panel" aria-labelledby="privacy-title">
+        <button className="back-button" type="button" onClick={openDashboard}>← Voltar ao painel</button>
+        <div className="privacy-heading">
+          <p className="eyebrow">Privacidade e dados</p>
+          <h1 id="privacy-title" ref={headingRef} tabIndex={-1}>Seus dados, suas escolhas.</h1>
+          <p className="lead compact">Baixe uma cópia dos seus dados, veja como eles são usados ou apague sua conta quando quiser.</p>
+        </div>
+
+        <div className="privacy-grid">
+          <section className="detail-card privacy-card" aria-labelledby="export-title">
+            <p className="eyebrow">Cópia</p>
+            <h2 id="export-title">Seus dados em um arquivo</h2>
+            <p id="export-description" className="detail-note">Um arquivo JSON com sua conta, consentimentos, perfil de risco, conversas, simulações, alertas e sessões.</p>
+            <button className="secondary-button" type="button" onClick={() => { void handleExportData(); }} disabled={exportState === 'loading'} aria-describedby="export-description">
+              {exportState === 'loading' ? 'Preparando arquivo…' : 'Baixar meus dados'}
+            </button>
+            <p className="privacy-status" role="status">{exportMessage}</p>
+            {exportError ? <InlineAlert id="export-error" message={exportError} onRetry={() => { void handleExportData(); }} /> : null}
+          </section>
+          <section className="detail-card privacy-card" aria-labelledby="data-use-card-title">
+            <p className="eyebrow">Transparência</p>
+            <h2 id="data-use-card-title">O que fazemos com seus dados</h2>
+            <p className="detail-note">Seis compromissos da AuraFi, em frases curtas.</p>
+            <button className="secondary-button" type="button" onClick={() => setIsDataUseOpen(true)}>Como usamos seus dados</button>
+          </section>
+        </div>
+
+        <section className="danger-zone" aria-labelledby="deletion-title">
+          <p className="eyebrow">Ação permanente</p>
+          <h2 id="deletion-title">Apagar sua conta</h2>
+          {deletionStep === 'idle' ? (
+            <>
+              <p className="danger-copy">Remove sua conta e tudo o que está ligado a ela. Se quiser, baixe uma cópia dos seus dados antes.</p>
+              <button ref={deletionStartRef} className="danger-button" type="button" onClick={() => moveDeletionStep('confirm')}>Apagar minha conta</button>
+            </>
+          ) : null}
+          {deletionStep === 'confirm' ? (
+            <div className="deletion-step">
+              <p id="deletion-warning" className="danger-warning">{DELETION_WARNING}</p>
+              {deletionError ? <InlineAlert id="deletion-error" message={deletionError} /> : null}
+              <div className="deletion-actions">
+                <button ref={deletionConfirmRef} className="danger-button" type="button" onClick={() => { void handleRequestDeletionCode(); }} disabled={deletionBusy !== null} aria-describedby="deletion-warning">
+                  {deletionBusy === 'sending' ? 'Enviando código…' : 'Enviar código de confirmação'}
+                </button>
+                <button className="back-button" type="button" onClick={cancelDeletion}>Cancelar</button>
+              </div>
+            </div>
+          ) : null}
+          {deletionStep === 'code' ? (
+            <form className="deletion-step" onSubmit={handleDeleteAccount} noValidate>
+              <p id="deletion-warning" className="danger-warning">{DELETION_WARNING}</p>
+              <div className="field-group">
+                <label htmlFor="deletion-code">Código de confirmação</label>
+                <input
+                  ref={deletionCodeRef}
+                  id="deletion-code"
+                  name="deletion-code"
+                  className="otp-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={deletionCode}
+                  onChange={(event) => { setDeletionCode(event.target.value.replace(/\D/g, '').slice(0, 6)); setDeletionError(null); }}
+                  aria-invalid={Boolean(deletionError)}
+                  aria-describedby={deletionError ? 'deletion-code-hint deletion-warning deletion-error' : 'deletion-code-hint deletion-warning'}
+                  required
+                />
+                <span id="deletion-code-hint" className="field-hint">Enviamos um código de seis números para <strong>{maskEmail(sessionEmail)}</strong>. O código expira em 5 minutos.{IS_FIXTURE_MODE ? ' Para a demonstração, use 123456.' : ''}</span>
+              </div>
+              <p className="privacy-status" role="status">{deletionNotice}</p>
+              {deletionError ? <InlineAlert id="deletion-error" message={deletionError} /> : null}
+              <div className="deletion-actions">
+                <button className="danger-button" type="submit" disabled={deletionBusy !== null}>{isDeleting ? 'Apagando conta…' : 'Apagar definitivamente'}</button>
+                <button className="text-button" type="button" onClick={() => { void handleRequestDeletionCode(); }} disabled={deletionBusy !== null}>{deletionBusy === 'sending' ? 'Enviando código…' : 'Reenviar código'}</button>
+                <button className="back-button" type="button" onClick={cancelDeletion} disabled={isDeleting}>Cancelar</button>
+              </div>
+            </form>
+          ) : null}
+        </section>
+
+        <p className="disclaimer"><strong>Neste navegador:</strong> sua sessão fica guardada apenas nesta aba. Planos salvos e o histórico de decisões ficam só neste dispositivo e também são apagados com a conta.</p>
+      </section>
+    );
+  };
 
   const renderOpportunity = () => {
     const opportunity = dashboardOpportunities.find((item) => item.opportunityId === selectedOpportunityId);
@@ -1703,14 +2205,28 @@ export default function App() {
   const renderEducationModal = () => {
     if (!isEducationOpen) return null;
     return (
-      <div className="modal-backdrop" role="presentation">
-        <section ref={educationModalRef} className="education-modal" role="dialog" aria-modal="true" aria-labelledby="education-title" aria-describedby="education-description">
-          <div className="modal-header"><div><p className="eyebrow">Explicação educativa</p><h2 id="education-title">Como ler uma oportunidade?</h2></div><button ref={educationCloseRef} className="modal-close" type="button" onClick={() => setIsEducationOpen(false)} aria-label="Fechar explicação">×</button></div>
-          <p id="education-description" className="modal-intro">Estes campos ajudam a fazer perguntas melhores. Eles não transformam uma oportunidade em uma promessa ou recomendação.</p>
-          <div className="education-grid"><article><span className="education-number">01</span><h3>APY observado</h3><p>É uma taxa anualizada informada no momento da observação. Pode variar, não é garantida e não representa o resultado da sua conta.</p></article><article><span className="education-number">02</span><h3>Risco e auditoria</h3><p>Dimensões como contrato, liquidez e volatilidade mostram o que precisa ser investigado. Auditoria não elimina risco e “não informado” continua desconhecido.</p></article><article><span className="education-number">03</span><h3>TVL e gas</h3><p>TVL descreve valor agregado observado no protocolo. Gas é uma estimativa de custo de rede. Nenhum dos dois indica adequação ao seu perfil.</p></article><article><span className="education-number">04</span><h3>Atualização e fonte</h3><p>A data de observação mostra quando o dado foi coletado. Quando houver atraso, trate a informação como contexto e revise a fonte antes de decidir.</p></article></div>
-          <p className="modal-disclaimer"><strong>Limite do MVP:</strong> a AuraFi apoia estudo e comparação. Não acessa saldo, não conecta wallet, não executa transações e não garante retorno.</p>
-        </section>
-      </div>
+      <Dialog className="education-modal" labelledBy="education-title" describedBy="education-description" onClose={() => setIsEducationOpen(false)}>
+        <div className="modal-header"><div><p className="eyebrow">Explicação educativa</p><h2 id="education-title">Como ler uma oportunidade?</h2></div><button className="modal-close" type="button" onClick={() => setIsEducationOpen(false)} aria-label="Fechar explicação">×</button></div>
+        <p id="education-description" className="modal-intro">Estes campos ajudam a fazer perguntas melhores. Eles não transformam uma oportunidade em uma promessa ou recomendação.</p>
+        <div className="education-grid"><article><span className="education-number">01</span><h3>APY observado</h3><p>É uma taxa anualizada informada no momento da observação. Pode variar, não é garantida e não representa o resultado da sua conta.</p></article><article><span className="education-number">02</span><h3>Risco e auditoria</h3><p>Dimensões como contrato, liquidez e volatilidade mostram o que precisa ser investigado. Auditoria não elimina risco e “não informado” continua desconhecido.</p></article><article><span className="education-number">03</span><h3>TVL e gas</h3><p>TVL descreve valor agregado observado no protocolo. Gas é uma estimativa de custo de rede. Nenhum dos dois indica adequação ao seu perfil.</p></article><article><span className="education-number">04</span><h3>Atualização e fonte</h3><p>A data de observação mostra quando o dado foi coletado. Quando houver atraso, trate a informação como contexto e revise a fonte antes de decidir.</p></article></div>
+        <p className="modal-disclaimer"><strong>Limite do MVP:</strong> a AuraFi apoia estudo e comparação. Não acessa saldo, não conecta wallet, não executa transações e não garante retorno.</p>
+      </Dialog>
+    );
+  };
+
+  const renderDataUseModal = () => {
+    if (!isDataUseOpen) return null;
+    return (
+      <Dialog className="education-modal" labelledBy="data-use-title" describedBy="data-use-description" onClose={() => setIsDataUseOpen(false)}>
+        <div className="modal-header"><div><p className="eyebrow">Privacidade</p><h2 id="data-use-title">Como usamos seus dados</h2></div><button className="modal-close" type="button" onClick={() => setIsDataUseOpen(false)} aria-label="Fechar">×</button></div>
+        <p id="data-use-description" className="modal-intro">O que a AuraFi faz, e não faz, com as informações que você compartilha.</p>
+        <ol className="data-use-list">
+          {DATA_USE_ITEMS.map((item, index) => (
+            <li key={item}><span className="education-number" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span><p>{item}</p></li>
+          ))}
+        </ol>
+        <p className="modal-disclaimer"><strong>Versão da política:</strong> {PRIVACY_POLICY_VERSION}</p>
+      </Dialog>
     );
   };
 
@@ -1773,7 +2289,7 @@ export default function App() {
       <header className="site-header">
         <button className="brand-button" type="button" onClick={() => { if (accessToken) setView('dashboard'); else setView('welcome'); }} aria-label="AuraFi — voltar ao início"><AuraMark /><span>AuraFi</span></button>
         <div className="header-session">
-          <span className="header-caption">Web Widget · {view === 'hub' ? 'Aura conectada' : view === 'dashboard' || view === 'opportunity' || view === 'simulation' ? 'estudo informativo' : 'onboarding'}</span>
+          <span className="header-caption">Web Widget · {view === 'hub' ? (conversationConsent ? 'Aura conectada' : 'consentimento') : view === 'privacy' ? 'privacidade e dados' : view === 'dashboard' || view === 'opportunity' || view === 'simulation' ? 'estudo informativo' : 'onboarding'}</span>
           {accessToken ? (
             <button
               className="header-alerts-button"
@@ -1796,6 +2312,9 @@ export default function App() {
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {isSubmitting ? (view === 'email' ? 'Enviando código.' : view === 'otp' ? 'Conferindo código.' : 'Salvando perfil.') : simulationState === 'loading' ? 'Gerando cenários educativos.' : ''}
       </div>
+      {/* Always mounted, so messages that outlive a view change (such as the
+          account deletion notice) are still announced. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{appAnnouncement}</div>
       <main className={`main-content view-${view}`} aria-busy={isSubmitting || simulationState === 'loading'}>
         {view === 'welcome' ? renderWelcome() : null}
         {view === 'email' ? renderEmail() : null}
@@ -1807,9 +2326,11 @@ export default function App() {
         {view === 'simulation' ? renderSimulation() : null}
         {view === 'hub' ? renderHub() : null}
         {view === 'alerts' ? renderAlerts() : null}
+        {view === 'privacy' ? renderPrivacy() : null}
       </main>
       <footer className="site-footer"><span>Dados de mercado da DeFiLlama · conteúdo informativo</span><span>Sem custódia · sem execução de ordens</span></footer>
       {renderEducationModal()}
+      {renderDataUseModal()}
     </div>
   );
 }

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://aurafi-web-widget.onrender.com/sitemap.xml
