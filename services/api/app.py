@@ -1157,36 +1157,44 @@ class AuraFiApp:
                 "O perfil de risco exige exatamente cinco respostas.",
                 details={"field": "answers", "expected": 5},
             )
-        profile = RiskProfile(
-            declared_profile=data.get("declared_profile"),
-            version=str(data.get("version", "profile-v1")),
-            source="questionnaire",
-            answers=tuple(RiskAnswer(item["question_id"], item["answer"]) for item in answers),
-            declared_at=utc_now(),
-        )
-        if self.persistence is not None:
-            if self.persistence.get_account(resolved.account.account_id) is None:
-                self.persistence.save_account(resolved.account.to_dict())
-            self.persistence.save_risk_profile(
-                {
-                    "risk_profile_id": str(uuid4()),
-                    "account_id": resolved.account.account_id,
-                    "declared_profile": getattr(
-                        profile.declared_profile, "value", profile.declared_profile
-                    ),
-                    "status": getattr(profile.status, "value", profile.status),
-                    "version": profile.version,
-                    "declared_at": profile.declared_at,
-                    "source": getattr(profile.source, "value", profile.source),
-                    "answers": [
-                        {"question_id": answer.question_id, "answer": answer.answer}
-                        for answer in profile.answers
-                    ],
-                }
+        account_id = resolved.account.account_id
+        # O perfil é somente de inclusão e a versão é única por conta: cada novo
+        # questionário ganha a versão seguinte, calculada sob o lock.
+        with self._lock:
+            if self.persistence is not None:
+                latest = self.persistence.get_latest_risk_profile(account_id)
+                latest_version = latest.get("version") if latest else None
+            else:
+                latest_version = getattr(self._profiles.get(account_id), "version", None)
+            profile = RiskProfile(
+                declared_profile=data.get("declared_profile"),
+                version=_next_profile_version(latest_version),
+                source="questionnaire",
+                answers=tuple(RiskAnswer(item["question_id"], item["answer"]) for item in answers),
+                declared_at=utc_now(),
             )
-        else:
-            with self._lock:
-                self._profiles[resolved.account.account_id] = profile
+            if self.persistence is not None:
+                if self.persistence.get_account(account_id) is None:
+                    self.persistence.save_account(resolved.account.to_dict())
+                self.persistence.save_risk_profile(
+                    {
+                        "risk_profile_id": str(uuid4()),
+                        "account_id": account_id,
+                        "declared_profile": getattr(
+                            profile.declared_profile, "value", profile.declared_profile
+                        ),
+                        "status": getattr(profile.status, "value", profile.status),
+                        "version": profile.version,
+                        "declared_at": profile.declared_at,
+                        "source": getattr(profile.source, "value", profile.source),
+                        "answers": [
+                            {"question_id": answer.question_id, "answer": answer.answer}
+                            for answer in profile.answers
+                        ],
+                    }
+                )
+            else:
+                self._profiles[account_id] = profile
         return Response(
             200,
             {
@@ -1701,6 +1709,18 @@ def create_app(**kwargs: Any) -> AuraFiApp:
     """Factory publica usada pelo servidor, CLI e smoke tests."""
 
     return AuraFiApp(**kwargs)
+
+
+def _next_profile_version(latest: str | None) -> str:
+    """profile-v1, profile-v2...: a versão seguinte à última declarada pela conta."""
+
+    if not latest:
+        return "profile-v1"
+    prefix, separator, number = latest.rpartition("-v")
+    if prefix == "profile" and separator and number.isdigit():
+        return f"profile-v{int(number) + 1}"
+    # Versão fora do padrão, gravada por outro caminho: sufixo que não se repete.
+    return f"profile-{uuid4().hex[:12]}"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:

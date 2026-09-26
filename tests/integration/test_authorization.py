@@ -493,6 +493,34 @@ class CrossAccountAuthorizationSuite:
                 self.assertEqual(risk["risk_profile"]["declared_profile"], declared)
                 self.assert_no_trace(risk, other.secrets())
 
+    def test_retaking_the_questionnaire_creates_the_next_version_for_that_account(self) -> None:
+        versions = []
+        for declared in ("conservative", "aggressive"):
+            status, saved = self.call(
+                "PUT",
+                "/v1/profile/risk",
+                {"declared_profile": declared, "answers": RISK_ANSWERS},
+                token=self.ana.access_token,
+            )
+            self.assertEqual(status, 200, saved)
+            versions.append(saved["risk_profile"]["version"])
+        self.assertEqual(versions, ["profile-v1", "profile-v2"])
+
+        status, risk = self.call("GET", "/v1/profile/risk", token=self.ana.access_token)
+        self.assertEqual(status, 200, risk)
+        self.assertEqual(risk["risk_profile"]["declared_profile"], "aggressive")
+        self.assertEqual(risk["risk_profile"]["version"], "profile-v2")
+
+        # A numeração é de cada conta: a primeira declaração da Bia é a v1.
+        status, saved = self.call(
+            "PUT",
+            "/v1/profile/risk",
+            {"declared_profile": "moderate", "answers": RISK_ANSWERS},
+            token=self.bia.access_token,
+        )
+        self.assertEqual(status, 200, saved)
+        self.assertEqual(saved["risk_profile"]["version"], "profile-v1")
+
     def test_identity_fields_in_body_do_not_change_the_owner(self) -> None:
         forged = {"account_id": self.ana.account_id, "email": self.ana.email}
 
