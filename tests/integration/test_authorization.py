@@ -629,6 +629,23 @@ class CrossAccountAuthorizationSuite:
         )
         self.assert_denied(status, conflict, 409, "IDEMPOTENCY_KEY_CONFLICT")
 
+    def test_idempotency_key_does_not_replay_to_a_signed_out_session(self) -> None:
+        body = {"declared_profile": "conservative", "answers": RISK_ANSWERS}
+        headers = {"Idempotency-Key": "perfil-antes-de-sair"}
+        status, first = self.call(
+            "PUT", "/v1/profile/risk", body, token=self.ana.access_token, headers=headers
+        )
+        self.assertEqual(status, 200, first)
+        status, payload = self.call("POST", "/v1/auth/logout", token=self.ana.access_token)
+        self.assertEqual(status, 204, payload)
+
+        # Mesma chave e mesmo corpo com o token já revogado: a resposta guardada não volta.
+        status, denied = self.call(
+            "PUT", "/v1/profile/risk", body, token=self.ana.access_token, headers=headers
+        )
+        self.assert_denied(status, denied, 401, AUTHENTICATION_FAILED)
+        self.assert_no_trace(denied, self.ana.secrets())
+
     # Sessão ---------------------------------------------------------------
 
     def test_protected_routes_reject_missing_or_invalid_credentials(self) -> None:
