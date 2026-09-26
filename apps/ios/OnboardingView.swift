@@ -84,13 +84,21 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
-            Image(systemName: "message.fill")
-                .font(.system(size: 68))
-                .foregroundStyle(AuraTheme.pink.opacity(0.88))
-                .accessibilityHidden(true)
+            if let notice = appModel.accountNotice {
+                // Ocupa o lugar do ícone decorativo para não empurrar o restante da tela.
+                accountNoticeBanner(notice)
+            } else {
+                Image(systemName: "message.fill")
+                    .font(.system(size: 68))
+                    .foregroundStyle(AuraTheme.pink.opacity(0.88))
+                    .accessibilityHidden(true)
+            }
             Spacer()
-            Button("Começar agora") { appModel.flow = .login }
-                .buttonStyle(AuraPrimaryButtonStyle())
+            Button("Começar agora") {
+                appModel.accountNotice = nil
+                appModel.flow = .login
+            }
+            .buttonStyle(AuraPrimaryButtonStyle())
             Text("A AuraFi apoia sua decisão e nunca movimenta seus recursos.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -249,6 +257,24 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
+    }
+
+    private func accountNoticeBanner(_ notice: String) -> some View {
+        Label {
+            Text(notice)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AuraTheme.purple)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(AuraTheme.success)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white, in: RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(AuraTheme.success.opacity(0.35)) }
+        .accessibilityElement(children: .combine)
+        .onAppear { AccessibilityNotification.Announcement(notice).post() }
     }
 
     private func onboardingScroll<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {

@@ -252,6 +252,8 @@ final class AppModel: ObservableObject {
     @Published var otpError: OTPErrorPresentation?
     @Published var isLocked = false
     @Published var biometricLockEnabled = false
+    /// Aviso exibido na tela inicial depois de uma ação de conta (por exemplo, a exclusão).
+    @Published var accountNotice: String?
     private var didAttemptSessionRestore = false
     private var resumedConversationId: String?
 
@@ -286,8 +288,11 @@ final class AppModel: ObservableObject {
             }
         }
         if let chat = chatStore.load() {
-            self.resumedConversationId = chat.conversationId
-            self.conversationConsent = chat.consent
+            // Consentimento de uma política anterior não vale mais: a conversa recomeça com o aceite atual.
+            if chat.consent.isCurrentPolicy {
+                self.resumedConversationId = chat.conversationId
+                self.conversationConsent = chat.consent
+            }
             self.conversationMessages = chat.pendingMessages.map {
                 ChatDisplayMessage(pendingId: $0.id, text: $0.text)
             }
@@ -568,10 +573,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func grantConversationConsent() async {
-        conversationConsent = .granted()
+    var conversationMemoryEnabled: Bool { conversationConsent?.memory == true }
+
+    func grantConversationConsent(memory: Bool = false) async {
+        conversationConsent = .granted(memory: memory)
         persistChatState()
         await ensureConversation()
+    }
+
+    /// Liga ou desliga a memória da conversa. As próximas mensagens já enviam o novo valor.
+    func setConversationMemory(_ enabled: Bool) {
+        guard let consent = conversationConsent, consent.memory != enabled else { return }
+        conversationConsent = consent.updatingMemory(enabled)
+        persistChatState()
     }
 
     func ensureConversation() async {
@@ -738,6 +752,8 @@ final class AppModel: ObservableObject {
     func restart() {
         sessionStore.clear()
         chatStore.clear()
+        AccountExportFile.removeAll()
+        accountNotice = nil
         didAttemptSessionRestore = false
         email = ""
         otpCode = ""
@@ -767,9 +783,50 @@ final class AppModel: ObservableObject {
     }
 
     func deleteLocalData() async {
-        decisions = []
-        localStore.saveDecisions([])
+        eraseLocalRecords()
         await logout()
+    }
+
+    /// Baixa a exportação da conta e a grava como arquivo temporário para compartilhar.
+    func exportAccountData(now: Date = Date()) async throws -> URL {
+        guard let session else { throw AccountActionError.signInRequired }
+        let data = try await apiClient.exportAccount(sessionToken: session.accessToken)
+        return try AccountExportFile.write(data, date: now)
+    }
+
+    /// Envia o código de confirmação da exclusão para o e-mail da sessão.
+    func requestAccountDeletionCode() async throws -> OTPChallenge {
+        guard let session else { throw AccountActionError.signInRequired }
+        // Confere a sessão antes de mandar um código que não poderia ser usado.
+        do {
+            _ = try await apiClient.getProfile(sessionToken: session.accessToken)
+        } catch AuraFiAPIError.server(let status, _, _) where status == 401 {
+            throw AccountActionError.signInRequired
+        } catch {
+            // Outras falhas aparecem, se persistirem, no pedido do código logo abaixo.
+        }
+        return try await apiClient.requestOTP(email: session.email)
+    }
+
+    /// A sessão venceu pelo relógio do aparelho; ajuda a explicar uma recusa 401 na exclusão.
+    var isSessionExpired: Bool { session?.isExpired() ?? true }
+
+    /// Confirma a exclusão no serviço e, em seguida, apaga tudo o que ficou neste aparelho.
+    func deleteAccount(challengeId: String, otp: String) async throws {
+        guard let session else { throw AccountActionError.signInRequired }
+        try await apiClient.deleteAccount(
+            sessionToken: session.accessToken,
+            challengeId: challengeId,
+            otp: otp
+        )
+        eraseLocalRecords()
+        restart()
+        accountNotice = PrivacyCopy.accountDeleted
+    }
+
+    private func eraseLocalRecords() {
+        decisions = []
+        localStore.clearAll()
     }
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) async {

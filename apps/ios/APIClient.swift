@@ -218,6 +218,33 @@ struct AuthSession: Decodable {
     }
 }
 
+extension AuthSession {
+    /// Indica se a sessão já venceu pelo relógio do aparelho. Sem data legível, assume que ainda vale.
+    func isExpired(now: Date = Date()) -> Bool {
+        guard let expiry = Self.parseTimestamp(expiresAt) else { return false }
+        return now >= expiry
+    }
+
+    static func parseTimestamp(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = withFraction.date(from: trimmed) ?? plain.date(from: trimmed) {
+            return date
+        }
+        // O serviço pode enviar frações com seis dígitos (microssegundos); a data basta sem elas.
+        let withoutFraction = trimmed.replacingOccurrences(
+            of: #"\.[0-9]+"#,
+            with: "",
+            options: .regularExpression
+        )
+        return plain.date(from: withoutFraction)
+    }
+}
+
 struct AuthResponse: Decodable {
     let session: AuthSession
 }
@@ -776,6 +803,9 @@ struct SimulationInputResponse: Decodable {
 }
 
 struct ConversationConsent: Codable, Equatable {
+    /// Versão única da política de privacidade, compartilhada com o widget web.
+    static let currentPolicyVersion = "aurafi-privacy-2026-09"
+
     let purpose: String
     let status: String
     let policyVersion: String
@@ -789,15 +819,51 @@ struct ConversationConsent: Codable, Equatable {
         case capturedAt = "captured_at"
     }
 
-    static func granted(now: Date = Date()) -> ConversationConsent {
+    /// Consentimentos de uma versão anterior da política precisam ser pedidos de novo.
+    var isCurrentPolicy: Bool { policyVersion == Self.currentPolicyVersion }
+
+    /// A memória é opcional e começa desligada; métricas de uso nunca são ativadas.
+    static func granted(now: Date = Date(), memory: Bool = false) -> ConversationConsent {
         ConversationConsent(
             purpose: "conversation",
             status: "granted",
-            policyVersion: "privacy-1.0",
+            policyVersion: currentPolicyVersion,
             capturedAt: ISO8601DateFormatter().string(from: now),
-            memory: false,
+            memory: memory,
             analytics: false
         )
+    }
+
+    /// Registra uma nova escolha sobre a memória (inclusive a revogação) sem mudar o restante do consentimento.
+    func updatingMemory(_ enabled: Bool, now: Date = Date()) -> ConversationConsent {
+        ConversationConsent(
+            purpose: purpose,
+            status: status,
+            policyVersion: policyVersion,
+            capturedAt: ISO8601DateFormatter().string(from: now),
+            memory: enabled,
+            analytics: analytics
+        )
+    }
+}
+
+struct AccountDeletionRequest: Encodable, Equatable {
+    let challengeId: String
+    let otp: String
+
+    enum CodingKeys: String, CodingKey {
+        case challengeId = "challenge_id"
+        case otp
+    }
+}
+
+struct AccountDeletionResponse: Decodable, Equatable {
+    let status: String?
+    let deletedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case deletedAt = "deleted_at"
     }
 }
 
@@ -1147,6 +1213,49 @@ struct AuraFiAPIClient {
         return response.conversation
     }
 
+    /// Baixa a exportação completa da conta. O conteúdo é salvo como veio, sem interpretação.
+    func exportAccount(sessionToken: String) async throws -> Data {
+        let data = try await perform(
+            makeRequest(
+                url: try makeURL(path: "/v1/account/export"),
+                method: "GET",
+                body: nil,
+                token: sessionToken,
+                declaresJSONBody: false
+            )
+        )
+        guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+            throw AuraFiAPIError.invalidResponse
+        }
+        return data
+    }
+
+    /// Apaga a conta depois da confirmação por código enviado ao e-mail da sessão.
+    @discardableResult
+    func deleteAccount(sessionToken: String, challengeId: String, otp: String) async throws -> AccountDeletionResponse {
+        let challengeId = challengeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let otp = otp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !challengeId.isEmpty else {
+            throw AuraFiAPIError.invalidParameter("Peça um código de confirmação antes de apagar a conta.")
+        }
+        guard otp.count == 6, otp.allSatisfy({ ("0"..."9").contains($0) }) else {
+            throw AuraFiAPIError.invalidParameter("Digite os seis dígitos do código.")
+        }
+        let body = try JSONEncoder().encode(AccountDeletionRequest(challengeId: challengeId, otp: otp))
+        let data = try await perform(
+            makeRequest(
+                url: try makeURL(path: "/v1/account/deletion"),
+                method: "POST",
+                body: body,
+                token: sessionToken,
+                declaresJSONBody: true
+            )
+        )
+        // Qualquer 2xx confirma a exclusão; um corpo inesperado não pode deixar dados locais para trás.
+        return (try? JSONDecoder().decode(AccountDeletionResponse.self, from: data))
+            ?? AccountDeletionResponse(status: nil, deletedAt: nil)
+    }
+
     private func makeURL(path: String) throws -> URL {
         guard let baseURL else { throw AuraFiAPIError.configuration }
         return baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
@@ -1171,16 +1280,57 @@ struct AuraFiAPIClient {
         token: String? = nil,
         authenticated: Bool = true
     ) async throws -> Response {
+        let data = try await perform(
+            makeRequest(
+                url: url,
+                method: method,
+                body: body,
+                token: authenticated ? token : nil,
+                declaresJSONBody: true
+            )
+        )
+        do {
+            return try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw AuraFiAPIError.decoding(error)
+        }
+    }
+
+    private func sendWithoutResponse(method: String, path: String, token: String) async throws {
+        _ = try await perform(
+            makeRequest(
+                url: try makeURL(path: path),
+                method: method,
+                body: nil,
+                token: token,
+                declaresJSONBody: false
+            )
+        )
+    }
+
+    private func makeRequest(
+        url: URL,
+        method: String,
+        body: Data?,
+        token: String?,
+        declaresJSONBody: Bool
+    ) -> URLRequest {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if declaresJSONBody {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         request.setValue(channel, forHTTPHeaderField: "X-Channel")
         request.setValue(correlationId, forHTTPHeaderField: "X-Correlation-ID")
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
-        if authenticated, let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = body
+        return request
+    }
 
+    /// Executa a requisição e devolve o corpo de uma resposta 2xx; demais status viram `AuraFiAPIError.server`.
+    private func perform(_ request: URLRequest) async throws -> Data {
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else { throw AuraFiAPIError.invalidResponse }
@@ -1192,40 +1342,7 @@ struct AuraFiAPIClient {
                     message: error?.error.message ?? "O serviço não pôde concluir a solicitação."
                 )
             }
-            do {
-                return try JSONDecoder().decode(Response.self, from: data)
-            } catch {
-                throw AuraFiAPIError.decoding(error)
-            }
-        } catch let error as AuraFiAPIError {
-            throw error
-        } catch {
-            throw AuraFiAPIError.transport(error)
-        }
-    }
-
-    private func sendWithoutResponse(method: String, path: String, token: String) async throws {
-        let url = try makeURL(path: path)
-        var request = URLRequest(url: url, timeoutInterval: timeout)
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(channel, forHTTPHeaderField: "X-Channel")
-        request.setValue(correlationId, forHTTPHeaderField: "X-Correlation-ID")
-        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AuraFiAPIError.invalidResponse
-            }
-            guard (200...299).contains(httpResponse.statusCode) else {
-                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                throw AuraFiAPIError.server(
-                    status: httpResponse.statusCode,
-                    code: error?.error.code ?? "API_ERROR",
-                    message: error?.error.message ?? "O serviço não pôde concluir a solicitação."
-                )
-            }
+            return data
         } catch let error as AuraFiAPIError {
             throw error
         } catch {

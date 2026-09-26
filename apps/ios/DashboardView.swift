@@ -328,6 +328,8 @@ struct OpportunityCard: View {
 struct AuraChatView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var message = ""
+    @State private var rememberContext = false
+    @State private var showPrivacy = false
 
     var body: some View {
         NavigationStack {
@@ -358,7 +360,7 @@ struct AuraChatView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.76))
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Memória e analytics ficam desativados", systemImage: "brain.head.profile")
+                    Label("Métricas de uso ficam desativadas", systemImage: "eye.slash")
                     Label("Você pode sair da conversa quando quiser", systemImage: "xmark.circle")
                     Label("Nenhuma transação pode ser executada", systemImage: "hand.raised.fill")
                 }
@@ -366,8 +368,22 @@ struct AuraChatView: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                Toggle(isOn: $rememberContext) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(PrivacyCopy.memoryToggleTitle)
+                            .font(.subheadline.weight(.semibold))
+                        Text(PrivacyCopy.memoryToggleHelp)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AuraTheme.pinkBright)
+                .padding()
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                .accessibilityHint("Opcional. Fica desligado se você não mudar.")
                 Button("Concordar e iniciar conversa") {
-                    Task { await appModel.grantConversationConsent() }
+                    Task { await appModel.grantConversationConsent(memory: rememberContext) }
                 }
                 .buttonStyle(AuraPrimaryButtonStyle())
                 .disabled(appModel.isSendingMessage)
@@ -375,10 +391,14 @@ struct AuraChatView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.58))
                     .multilineTextAlignment(.center)
+                Button("Como usamos seus dados") { showPrivacy = true }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AuraTheme.pinkBright)
             }
             .foregroundStyle(.white)
             .padding(24)
         }
+        .sheet(isPresented: $showPrivacy) { PrivacyExplanationView() }
     }
 
     private var conversationView: some View {
@@ -1350,6 +1370,9 @@ struct SettingsView: View {
     @State private var confirmExit = false
     @State private var confirmDelete = false
     @State private var showPrivacy = false
+    @State private var showAccountDeletion = false
+    @State private var isExporting = false
+    @State private var exportFailure: AccountActionFailure?
 
     var body: some View {
         NavigationStack {
@@ -1389,9 +1412,40 @@ struct SettingsView: View {
                     Label("Apoio não custodial", systemImage: "checkmark.shield")
                 }
                 Section("Privacidade") {
-                    ShareLink(item: exportText) { Label("Compartilhar meus dados locais", systemImage: "square.and.arrow.up") }
+                    Toggle(isOn: Binding(
+                        get: { appModel.conversationMemoryEnabled },
+                        set: { appModel.setConversationMemory($0) }
+                    )) {
+                        Label("Lembrar o contexto das conversas", systemImage: "brain.head.profile")
+                    }
+                    .disabled(appModel.conversationConsent == nil)
+                    Text(
+                        appModel.conversationConsent == nil
+                            ? "Fica disponível depois que você concordar em conversar com a Aura."
+                            : "A Aura usa as mensagens anteriores da conversa para responder. A mudança vale a partir da próxima mensagem."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Button {
+                        Task { await exportAccountData() }
+                    } label: {
+                        HStack {
+                            Label("Baixar meus dados", systemImage: "arrow.down.doc")
+                            Spacer()
+                            if isExporting { ProgressView() }
+                        }
+                    }
+                    .disabled(isExporting)
+                    .accessibilityHint("Gera um arquivo com os dados da sua conta para salvar ou compartilhar")
                     Button { showPrivacy = true } label: { Label("Como usamos seus dados", systemImage: "hand.raised") }
                     Button(role: .destructive) { confirmDelete = true } label: { Label("Apagar dados deste aparelho", systemImage: "trash") }
+                }
+                Section {
+                    Button(role: .destructive) { showAccountDeletion = true } label: {
+                        Label("Apagar minha conta", systemImage: "person.crop.circle.badge.xmark")
+                    }
+                } footer: {
+                    Text("Apaga sua conta e seus dados no serviço. Pedimos um código enviado ao seu e-mail para confirmar.")
                 }
                 Section {
                     Button("Sair", role: .destructive) { confirmExit = true }
@@ -1399,6 +1453,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Ajustes")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
+            .navigationDestination(isPresented: $showAccountDeletion) { AccountDeletionView() }
             .confirmationDialog("Sair da conta?", isPresented: $confirmExit, titleVisibility: .visible) {
                 Button("Confirmar saída", role: .destructive) { Task { await appModel.logout() } }
                 Button("Cancelar", role: .cancel) {}
@@ -1406,16 +1461,45 @@ struct SettingsView: View {
             .confirmationDialog("Apagar dados locais?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Apagar e sair", role: .destructive) { Task { await appModel.deleteLocalData() } }
                 Button("Cancelar", role: .cancel) {}
-            } message: { Text("Remove sessão e histórico deste aparelho. A exclusão da conta no servidor ainda não está disponível.") }
+            } message: { Text("Remove sessão e histórico deste aparelho. Sua conta continua ativa no serviço.") }
+            .alert(
+                "Não foi possível baixar seus dados",
+                isPresented: Binding(
+                    get: { exportFailure != nil },
+                    set: { if !$0 { exportFailure = nil } }
+                ),
+                presenting: exportFailure
+            ) { failure in
+                if failure.requiresSignIn {
+                    Button("Entrar novamente") { Task { await appModel.logout() } }
+                    Button("Agora não", role: .cancel) {}
+                } else {
+                    Button("OK", role: .cancel) {}
+                }
+            } message: { failure in
+                Text(failure.message)
+            }
             .sheet(isPresented: $showPrivacy) { PrivacyExplanationView() }
         }
     }
 
-    private var exportText: String {
-        let rows = appModel.decisions.map {
-            "\($0.createdAt.formatted()) | \($0.protocolName) \($0.asset) | \($0.outcome.rawValue)"
+    /// Baixa a exportação da conta, grava o arquivo temporário e abre a folha de compartilhamento.
+    private func exportAccountData() async {
+        guard !isExporting else { return }
+        isExporting = true
+        defer { isExporting = false }
+        do {
+            let fileURL = try await appModel.exportAccountData()
+            let presented = ShareSheetPresenter.present(fileURL: fileURL) {
+                AccountExportFile.remove(fileURL)
+            }
+            if !presented {
+                AccountExportFile.remove(fileURL)
+                exportFailure = AccountActionFailure(message: "Não foi possível abrir as opções para salvar o arquivo.")
+            }
+        } catch {
+            exportFailure = .export(error)
         }
-        return (["AuraFi - dados locais", "Conta: \(appModel.email)", "Perfil: \(appModel.declaredProfile?.title ?? "não declarado")"] + rows).joined(separator: "\n")
     }
 }
 
@@ -1424,13 +1508,15 @@ private struct PrivacyExplanationView: View {
     var body: some View {
         NavigationStack {
             List {
-                Label("OTP confirma o controle do e-mail.", systemImage: "envelope.badge.shield.half.filled")
-                Label("Mensagens só vão ao hub após consentimento explícito.", systemImage: "message.badge")
-                Label("Tokens de sessão ficam no Keychain do aparelho.", systemImage: "key.horizontal")
-                Label("Histórico de decisões fica local neste MVP.", systemImage: "iphone")
-                Label("A AuraFi nunca solicita seed phrase ou chave privada.", systemImage: "hand.raised.fill")
+                Label("O código enviado por e-mail confirma que o e-mail é seu.", systemImage: "envelope.badge.shield.half.filled")
+                Label("Suas mensagens só vão para a Aura depois que você concorda.", systemImage: "message.badge")
+                Label("A memória da conversa só é usada se você ativar.", systemImage: "brain.head.profile")
+                Label("Sua sessão fica guardada no Keychain do aparelho.", systemImage: "key.horizontal")
+                Label("Você pode baixar seus dados ou apagar sua conta quando quiser.", systemImage: "arrow.down.doc")
+                Label("A AuraFi nunca pede seed phrase, senha ou chave privada.", systemImage: "hand.raised.fill")
             }
-            .navigationTitle("Privacidade")
+            .navigationTitle("Como usamos seus dados")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
         }
     }

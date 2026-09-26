@@ -13,6 +13,7 @@
 		A10000000000000000000005 /* AuraFiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* AuraFiTests.swift */; };
 		A10000000000000000000006 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SessionStore.swift */; };
 		A1000000000000000000000A /* BiometricLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* BiometricLock.swift */; };
+		A1000000000000000000000B /* AccountPrivacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* AccountPrivacy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +31,7 @@
 		A20000000000000000000008 /* AuraFiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AuraFiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000009 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 		A2000000000000000000000A /* BiometricLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLock.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* AccountPrivacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPrivacy.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +54,7 @@
 				A20000000000000000000004 /* DashboardView.swift */,
 				A20000000000000000000009 /* SessionStore.swift */,
 				A2000000000000000000000A /* BiometricLock.swift */,
+				A2000000000000000000000B /* AccountPrivacy.swift */,
 				A40000000000000000000002 /* Config */,
 				A40000000000000000000004 /* Tests */,
 				A40000000000000000000003 /* Products */,
@@ -145,6 +148,7 @@
 				A10000000000000000000004 /* DashboardView.swift in Sources */,
 				A10000000000000000000006 /* SessionStore.swift in Sources */,
 				A1000000000000000000000A /* BiometricLock.swift in Sources */,
+				A1000000000000000000000B /* AccountPrivacy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

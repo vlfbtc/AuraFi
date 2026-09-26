@@ -36,8 +36,13 @@ enum SessionStoreError: Error {
 }
 
 struct SessionStore {
-    private let service = "br.com.aurafi.app.session"
-    private let account = "authenticated-session"
+    private let service: String
+    private let account: String
+
+    init(service: String = "br.com.aurafi.app.session", account: String = "authenticated-session") {
+        self.service = service
+        self.account = account
+    }
 
     func save(_ session: AuthSession) throws {
         guard let data = try? JSONEncoder().encode(PersistedSession(session)) else {
@@ -94,8 +99,13 @@ struct PersistedChatState: Codable, Equatable {
 }
 
 struct ChatStateStore {
-    private let service = "br.com.aurafi.app.conversation"
-    private let account = "conversation-resume-state"
+    private let service: String
+    private let account: String
+
+    init(service: String = "br.com.aurafi.app.conversation", account: String = "conversation-resume-state") {
+        self.service = service
+        self.account = account
+    }
 
     func save(_ state: PersistedChatState) throws {
         guard let data = try? JSONEncoder().encode(state) else { throw SessionStoreError.encoding }
@@ -154,24 +164,35 @@ struct DecisionRecord: Identifiable, Codable, Equatable {
 struct AppLocalStore {
     private let decisionsKey = "aurafi.decisions.v1"
     private let opportunitiesKey = "aurafi.market-cache.v1"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func loadDecisions() -> [DecisionRecord] {
-        guard let data = UserDefaults.standard.data(forKey: decisionsKey) else { return [] }
+        guard let data = defaults.data(forKey: decisionsKey) else { return [] }
         return (try? JSONDecoder().decode([DecisionRecord].self, from: data)) ?? []
     }
 
     func saveDecisions(_ decisions: [DecisionRecord]) {
         guard let data = try? JSONEncoder().encode(decisions) else { return }
-        UserDefaults.standard.set(data, forKey: decisionsKey)
+        defaults.set(data, forKey: decisionsKey)
     }
 
     func loadOpportunities() -> [Opportunity] {
-        guard let data = UserDefaults.standard.data(forKey: opportunitiesKey) else { return [] }
+        guard let data = defaults.data(forKey: opportunitiesKey) else { return [] }
         return (try? JSONDecoder().decode([Opportunity].self, from: data)) ?? []
     }
 
     func saveOpportunities(_ opportunities: [Opportunity]) {
         guard let data = try? JSONEncoder().encode(opportunities) else { return }
-        UserDefaults.standard.set(data, forKey: opportunitiesKey)
+        defaults.set(data, forKey: opportunitiesKey)
+    }
+
+    /// Remove o histórico de decisões e a última leitura de mercado guardados neste aparelho.
+    func clearAll() {
+        defaults.removeObject(forKey: decisionsKey)
+        defaults.removeObject(forKey: opportunitiesKey)
     }
 }
