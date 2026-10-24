@@ -1,4 +1,6 @@
 
+import type { Attribution } from './attribution';
+
 export type ApiMode = 'fixture' | 'api' | 'api-with-fixture-fallback';
 export type Channel = 'web_widget' | 'ios_app' | 'simulated';
 export type ProfileLevel = 'conservative' | 'moderate' | 'aggressive';
@@ -625,19 +627,20 @@ export function createWidgetApi(options: ApiClientOptions = {}) {
       }),
     ),
 
-    requestOtp: (email: string, context: RequestContext = {}): Promise<ApiResult<OtpChallenge>> => withFallback(
+    /** `attribution` only feeds the aggregate count of sign-up origins; it never changes the answer. */
+    requestOtp: (email: string, context: RequestContext = {}, attribution: Attribution | null = null): Promise<ApiResult<OtpChallenge>> => withFallback(
       context,
       () => fixtureResult({ challengeId: 'challenge_fixture_001', expiresAt: new Date(Date.now() + 300000).toISOString(), delivery: 'mock' }, context),
-      () => request('POST', '/v1/auth/otp/request', context, { email, channel: 'web_widget' }, (value) => {
+      () => request('POST', '/v1/auth/otp/request', context, { email, channel: 'web_widget', ...(attribution ? { attribution } : {}) }, (value) => {
         const raw = value as { challenge_id: string; expires_at: string; delivery: 'email' | 'mock' };
         return { challengeId: raw.challenge_id, expiresAt: raw.expires_at, delivery: raw.delivery };
       }),
     ),
 
-    verifyOtp: (challengeId: string, otp: string, context: RequestContext = {}): Promise<ApiResult<AuthSession>> => withFallback(
+    verifyOtp: (challengeId: string, otp: string, context: RequestContext = {}, attribution: Attribution | null = null): Promise<ApiResult<AuthSession>> => withFallback(
       context,
       () => fixtureResult({ accessToken: 'token_fixture', refreshToken: 'refresh_fixture', tokenType: 'Bearer', expiresAt: new Date(Date.now() + 3600000).toISOString(), accountId: 'account_fixture_001', email: 'maria.fixture@example.test' }, context),
-      () => request('POST', '/v1/auth/otp/verify', context, { challenge_id: challengeId, otp }, (value) => {
+      () => request('POST', '/v1/auth/otp/verify', context, { challenge_id: challengeId, otp, ...(attribution ? { attribution } : {}) }, (value) => {
         const raw = value as { session: { access_token: string; refresh_token: string; token_type: 'Bearer'; expires_at: string; account: { account_id: string; email: string } } };
         return { accessToken: raw.session.access_token, refreshToken: raw.session.refresh_token, tokenType: raw.session.token_type, expiresAt: raw.session.expires_at, accountId: raw.session.account.account_id, email: raw.session.account.email };
       }),

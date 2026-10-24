@@ -94,7 +94,9 @@ paths:
         escolhe provedor externo de autenticação e a entrega pode ser simulada
         em desenvolvimento e testes. A resposta não confirma se o e-mail já
         possui conta. Com cadastro aberto, a conta só é criada depois que o
-        código é confirmado em /v1/auth/otp/verify.
+        código é confirmado em /v1/auth/otp/verify. O campo opcional
+        attribution só alimenta a contagem agregada de origem (ver Attribution)
+        e nunca muda a resposta.
       operationId: requestOtp
       security: []
       parameters:
@@ -123,7 +125,10 @@ paths:
     post:
       tags: [auth]
       summary: Verifica o OTP e abre uma sessão
-      description: A sessão emitida é a identidade canônica compartilhada pelos canais do MVP.
+      description: >-
+        A sessão emitida é a identidade canônica compartilhada pelos canais do
+        MVP. Quando a confirmação cria a conta, o campo opcional attribution
+        soma uma conta criada na contagem agregada de origem (ver Attribution).
       operationId: verifyOtp
       security: []
       parameters:
@@ -1049,6 +1054,38 @@ components:
           format: email
         channel:
           $ref: '#/components/schemas/Channel'
+        attribution:
+          $ref: '#/components/schemas/Attribution'
+    Attribution:
+      type: object
+      description: >-
+        Origem de campanha do cadastro, lida pelo site só dos parâmetros
+        utm_source, utm_medium e utm_campaign. O servidor compara cada valor com
+        a lista fechada da convenção de origem; um valor fora dela conta como
+        outro e um valor ausente como direto, e nenhum texto livre é gravado.
+        O resultado é só um contador por semana, sem conta, e-mail, IP ou
+        cookie, nunca gravado junto do pedido de código ou da conta. Pedidos
+        de código contam só quando podem abrir uma conta nova; entrar numa
+        conta existente não soma nada. Um objeto malformado não rejeita a
+        requisição.
+      additionalProperties: true
+      properties:
+        utm_source:
+          type: string
+          maxLength: 40
+          description: >-
+            perfil_a, perfil_b, perfil_c, perfil_d, google, meta, youtube, x,
+            linkedin, tiktok, podcast ou teste (reservado, fora dos relatórios).
+        utm_medium:
+          type: string
+          maxLength: 40
+          description: >-
+            influenciador, busca_paga, video_pago, social_pago, social_organico,
+            video_organico ou indicacao.
+        utm_campaign:
+          type: string
+          maxLength: 40
+          description: entenda_onda1, entenda_onda2 ou piloto_onda3.
     OtpRequestResponse:
       type: object
       required: [challenge_id, expires_at, delivery, meta]
@@ -1072,6 +1109,8 @@ components:
         otp:
           type: string
           pattern: '^[0-9]{6}$'
+        attribution:
+          $ref: '#/components/schemas/Attribution'
     RefreshRequest:
       type: object
       required: [refresh_token]

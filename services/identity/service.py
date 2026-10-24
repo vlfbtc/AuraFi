@@ -291,6 +291,10 @@ class OtpRequestResult:
     expires_at: datetime
     delivery: DeliveryMode
     meta: ApiMeta
+    # Interno, fora de to_dict(): a resposta não revela se o e-mail tem conta.
+    # Verdadeiro quando o código pode abrir uma conta nova (e-mail sem conta e
+    # cadastro aberto), o que a contagem agregada de origem trata como cadastro.
+    starts_signup: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -307,6 +311,8 @@ class AuthenticationResult:
     identity: dict[str, object]
     channel: ChannelContext
     meta: ApiMeta
+    # Interno, fora de to_dict(): esta confirmação criou a conta agora.
+    account_created: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {"session": self.session.to_dict(), "meta": self.meta.to_dict()}
@@ -771,6 +777,7 @@ class IdentityService:
             expires_at=challenge.expires_at,
             delivery=self._delivery_mode,
             meta=ApiMeta.from_context(context),
+            starts_signup=account is None and self._allow_self_signup,
         )
 
     def verify_otp(
@@ -842,6 +849,7 @@ class IdentityService:
             identity=association.to_identity_dict(email_verified=account.email_verified),
             channel=resolved_channel,
             meta=ApiMeta.from_context(context),
+            account_created=created,
         )
 
     def confirm_account_ownership(

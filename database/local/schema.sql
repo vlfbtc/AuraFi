@@ -338,6 +338,29 @@ CREATE TABLE IF NOT EXISTS idempotent_responses (
     PRIMARY KEY (principal, route, idempotency_key)
 );
 
+-- Contagem agregada da origem dos cadastros (migration 004). Só valores da
+-- lista fechada de services/acquisition ('outro' para o resto, 'direto' sem
+-- origem); sem conta, e-mail, IP, cookie ou instante mais preciso que a semana,
+-- e nada liga uma linha a um pedido de código ou a uma conta.
+CREATE TABLE IF NOT EXISTS acquisition_weekly (
+    week_start TEXT NOT NULL
+        CHECK (date(week_start) = week_start AND strftime('%w', week_start) = '1'),
+    utm_source TEXT NOT NULL CHECK (utm_source IN (
+        'direto', 'outro', 'perfil_a', 'perfil_b', 'perfil_c', 'perfil_d', 'google',
+        'meta', 'youtube', 'x', 'linkedin', 'tiktok', 'podcast', 'teste'
+    )),
+    utm_medium TEXT NOT NULL CHECK (utm_medium IN (
+        'direto', 'outro', 'influenciador', 'busca_paga', 'video_pago', 'social_pago',
+        'social_organico', 'video_organico', 'indicacao'
+    )),
+    utm_campaign TEXT NOT NULL CHECK (utm_campaign IN (
+        'direto', 'outro', 'entenda_onda1', 'entenda_onda2', 'piloto_onda3'
+    )),
+    code_requests INTEGER NOT NULL DEFAULT 0 CHECK (code_requests >= 0),
+    accounts_created INTEGER NOT NULL DEFAULT 0 CHECK (accounts_created >= 0),
+    PRIMARY KEY (week_start, utm_source, utm_medium, utm_campaign)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_channel_identities_account
     ON channel_identities(account_id, created_at);

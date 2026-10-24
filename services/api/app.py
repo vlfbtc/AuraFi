@@ -87,6 +87,12 @@ from services.recommendation import (
     RiskAnswer,
     RiskProfile,
 )
+from services.acquisition import (
+    AcquisitionStore,
+    InMemoryAcquisitionCounter,
+    normalize_attribution,
+    week_start,
+)
 from services.api import security_log
 from services.simulated_channel import SimulatedChannelAdapter
 from services.simulation import (
@@ -681,6 +687,10 @@ class AuraFiApp:
                 "DATABASE_URL (PostgreSQL) ou AURAFI_DB_PATH persistente é obrigatório em produção"
             )
         self.persistence, self.persistence_kind = self._create_persistence(database_url, database_path)
+        # Contagem agregada da origem dos cadastros: no banco quando ele existe.
+        self._acquisition: AcquisitionStore = (
+            self.persistence if self.persistence is not None else InMemoryAcquisitionCounter()
+        )
         if self.persistence is None:
             self.account_repository = InMemoryAccountRepository([initial_account])
             self._challenges = InMemoryOtpChallengeRepository()
@@ -1089,6 +1099,8 @@ class AuraFiApp:
             request_id=request.request_id,
             correlation_id=request.correlation_id,
         )
+        if result.starts_signup:
+            self._count_acquisition(payload.get("attribution"), code_requests=1)
         return Response(202, result.to_dict())
 
     def _otp_verify(self, request: Request) -> Response:
@@ -1109,7 +1121,29 @@ class AuraFiApp:
             request_id=request.request_id,
             correlation_id=request.correlation_id,
         )
+        if result.account_created:
+            self._count_acquisition(payload.get("attribution"), accounts_created=1)
         return Response(200, result.to_dict())
+
+    def _count_acquisition(self, attribution: Any, *, code_requests: int = 0, accounts_created: int = 0) -> None:
+        """Soma 1 na contagem semanal da origem, reduzida à lista fechada.
+
+        Nada da origem vai para o registro de eventos, que tem a conta e o IP
+        desta mesma requisição, e uma falha aqui nunca interrompe o login.
+        """
+
+        normalized = normalize_attribution(attribution)
+        try:
+            self._acquisition.record_acquisition(
+                week_start(utc_now()),
+                normalized.source,
+                normalized.medium,
+                normalized.campaign,
+                code_requests=code_requests,
+                accounts_created=accounts_created,
+            )
+        except Exception as exc:  # a contagem é best effort
+            security_log.emit("acquisition.count_failed", **security_log.exception_fields(exc))
 
     def _refresh_session(self, request: Request) -> Response:
         payload = _object_body(request)

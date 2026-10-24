@@ -1514,6 +1514,7 @@ private struct PrivacyExplanationView: View {
                 Label("Sua sessão fica guardada no Keychain do aparelho.", systemImage: "key.horizontal")
                 Label("Você pode baixar seus dados ou apagar sua conta quando quiser.", systemImage: "arrow.down.doc")
                 Label("A AuraFi nunca pede seed phrase, senha ou chave privada.", systemImage: "hand.raised.fill")
+                Label("Contamos, sem identificar ninguém, quantos cadastros vieram de cada campanha.", systemImage: "chart.bar")
             }
             .navigationTitle("Como usamos seus dados")
             .navigationBarTitleDisplayMode(.inline)

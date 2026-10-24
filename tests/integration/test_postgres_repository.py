@@ -32,6 +32,7 @@ class PostgresRepositoryTest(unittest.TestCase):
         with self.repository._transaction() as connection:  # noqa: SLF001 - test-only reset
             connection.execute(
                 """TRUNCATE
+                aurafi.acquisition_weekly,
                 aurafi.idempotent_responses, aurafi.alerts, aurafi.messages,
                 aurafi.conversation_runtime_state, aurafi.conversations,
                 aurafi.simulation_scenarios, aurafi.simulations, aurafi.opportunities,
@@ -397,6 +398,91 @@ class PostgresRepositoryTest(unittest.TestCase):
             self.assertEqual(counts["otp_challenges"], 1)
             self.assertIsNone(self.repository.get_account("acct-old"))
             self.assertIsNotNone(self.repository.find_account_by_email("fica@example.com"))
+        finally:
+            app.close()
+
+    def test_acquisition_counts_on_postgres(self) -> None:
+        from datetime import date
+
+        import psycopg
+
+        repo = self.repository
+        monday = date(2026, 10, 19)
+        self.assertIsNotNone(
+            repo._fetchone(  # noqa: SLF001 - test-only check
+                "SELECT version FROM aurafi.schema_migrations WHERE version = %s", ("004_acquisition_counts",)
+            )
+        )
+        columns = {
+            row["column_name"]
+            for row in repo._fetchall(  # noqa: SLF001 - test-only check
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'aurafi' AND table_name = 'acquisition_weekly'"
+            )
+        }
+        self.assertEqual(
+            columns,
+            {"week_start", "utm_source", "utm_medium", "utm_campaign", "code_requests", "accounts_created"},
+        )
+
+        repo.record_acquisition(monday, "teste", "video_organico", "entenda_onda1", code_requests=1)
+        repo.record_acquisition(monday, "teste", "video_organico", "entenda_onda1", accounts_created=1)
+        repo.record_acquisition(monday, "direto", "direto", "direto", code_requests=1)
+        expected = [
+            {"week_start": "2026-10-19", "utm_source": "direto", "utm_medium": "direto", "utm_campaign": "direto", "code_requests": 1, "accounts_created": 0},
+            {"week_start": "2026-10-19", "utm_source": "teste", "utm_medium": "video_organico", "utm_campaign": "entenda_onda1", "code_requests": 1, "accounts_created": 1},
+        ]
+        self.assertEqual(repo.list_acquisition_counts(), expected)
+
+        # O banco recusa texto livre e semana que não começa na segunda-feira.
+        for week, source in ((monday, "maria@example.com"), (date(2026, 10, 21), "direto")):
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                repo.record_acquisition(week, source, "direto", "direto", code_requests=1)
+        self.assertEqual(repo.list_acquisition_counts(), expected)
+
+    def test_app_counts_sign_up_origin_on_postgres(self) -> None:
+        from unittest.mock import patch
+
+        from services.api import create_app
+        from services.api.app import Request
+        from services.conversation import DeterministicMockLlm
+
+        campaign = {"utm_source": "teste", "utm_medium": "video_organico", "utm_campaign": "entenda_onda1"}
+        with patch.dict(os.environ, {"DATABASE_URL": DATABASE_URL, "AURAFI_ALLOW_SELF_SIGNUP": "true"}):
+            app = create_app(market_mode="test", llm=DeterministicMockLlm())
+        try:
+            def sign_in(email: str, attribution: dict | None) -> None:
+                body = {"email": email, "channel": "web_widget", **({"attribution": attribution} if attribution else {})}
+                requested = app.handle(Request(method="POST", target="/v1/auth/otp/request", headers={}, body=body))
+                self.assertEqual(requested.status, 202)
+                challenge_id = requested.payload["challenge_id"]
+                verify = {"challenge_id": challenge_id, "otp": app.otp_sink.code_for(challenge_id)}
+                if attribution:
+                    verify["attribution"] = attribution
+                verified = app.handle(Request(method="POST", target="/v1/auth/otp/verify", headers={}, body=verify))
+                self.assertEqual(verified.status, 200)
+
+            sign_in("campanha@example.com", campaign)
+            sign_in("campanha@example.com", campaign)  # conta existente: não soma nada
+            sign_in("direta@example.com", None)
+            sign_in("email-no-link@example.com", {"utm_source": "maria@example.com", "utm_campaign": "x" * 500})
+            counts = {
+                (row["utm_source"], row["utm_medium"], row["utm_campaign"]): (row["code_requests"], row["accounts_created"])
+                for row in self.repository.list_acquisition_counts()
+            }
+            self.assertEqual(
+                counts,
+                {
+                    ("teste", "video_organico", "entenda_onda1"): (1, 1),
+                    ("direto", "direto", "direto"): (1, 1),
+                    ("outro", "direto", "outro"): (1, 1),
+                },
+            )
+            challenges = self.repository._fetchall("SELECT * FROM aurafi.otp_challenges")  # noqa: SLF001
+            accounts = self.repository._fetchall("SELECT * FROM aurafi.accounts")  # noqa: SLF001
+            for row in [*challenges, *accounts]:
+                self.assertNotIn("entenda_onda1", repr(row))
+                self.assertNotIn("video_organico", repr(row))
         finally:
             app.close()
 

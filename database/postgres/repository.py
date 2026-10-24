@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
@@ -66,6 +66,21 @@ def _stringify_timestamps(row: dict[str, Any] | None, fields: Iterable[str]) -> 
         if row.get(field) is not None:
             row[field] = _format_timestamp(row[field])
     return row
+
+
+def _acquisition_values(week: Any, code_requests: Any, accounts_created: Any) -> tuple[date, int, int]:
+    """Semana como data (não instante) e somas inteiras, não negativas e não nulas."""
+
+    if not isinstance(week, date) or isinstance(week, datetime):
+        raise TypeError("week deve ser uma data")
+    counts = []
+    for value in (code_requests, accounts_created):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("as contagens devem ser inteiros não negativos")
+        counts.append(value)
+    if sum(counts) == 0:
+        raise ValueError("a contagem soma pelo menos um pedido ou uma conta")
+    return week, counts[0], counts[1]
 
 
 class PostgresRepository:
@@ -989,6 +1004,41 @@ class PostgresRepository:
                 ),
             )
         return self.get_idempotent_response(principal, route, idempotency_key)  # type: ignore[return-value]
+
+    # Contagem agregada da origem dos cadastros (services/acquisition). A tabela
+    # não tem coluna de conta, e-mail ou IP; a lista fechada é garantida pelos
+    # CHECK da migration 004.
+
+    def record_acquisition(
+        self,
+        week: date,
+        source: str,
+        medium: str,
+        campaign: str,
+        *,
+        code_requests: int = 0,
+        accounts_created: int = 0,
+    ) -> None:
+        """Soma pedidos de código e contas criadas na linha da semana e da origem."""
+
+        week_value, requests, accounts = _acquisition_values(week, code_requests, accounts_created)
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO aurafi.acquisition_weekly AS counts
+                (week_start, utm_source, utm_medium, utm_campaign, code_requests, accounts_created)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (week_start, utm_source, utm_medium, utm_campaign) DO UPDATE SET
+                    code_requests = counts.code_requests + EXCLUDED.code_requests,
+                    accounts_created = counts.accounts_created + EXCLUDED.accounts_created""",
+                (week_value, source, medium, campaign, requests, accounts),
+            )
+
+    def list_acquisition_counts(self) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """SELECT week_start, utm_source, utm_medium, utm_campaign, code_requests, accounts_created
+            FROM aurafi.acquisition_weekly ORDER BY week_start, utm_source, utm_medium, utm_campaign"""
+        )
+        return [{**row, "week_start": row["week_start"].isoformat()} for row in rows]
 
     # Dados da conta: exportação, exclusão e retenção (regras em database/account_data.py).
 

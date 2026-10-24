@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiClientError, PRIVACY_POLICY_VERSION, createWidgetApi, widgetApi } from './api';
+import { clearAttribution, readAttribution } from './attribution';
 import type { Alert as ApiAlert, AlertType, ApiMeta, AuthSession, Consent, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
 
 type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub' | 'alerts' | 'privacy';
@@ -329,6 +330,7 @@ const DATA_USE_ITEMS: readonly string[] = [
   'Sua sessão fica guardada apenas nesta aba do navegador.',
   'Você pode baixar seus dados ou apagar sua conta quando quiser.',
   'A AuraFi nunca pede seed phrase, senha ou chave privada.',
+  'Contamos, sem identificar ninguém, quantos cadastros vieram de cada campanha.',
 ];
 const DELETION_WARNING = 'Isso apaga sua conta, seu perfil de risco, suas conversas, simulações e alertas. A ação não pode ser desfeita.';
 const ACCOUNT_DELETED_MESSAGE = 'Sua conta e seus dados foram apagados.';
@@ -1153,7 +1155,7 @@ export default function App() {
     setIsSubmitting(true);
     clearError();
     try {
-      const nextChallenge = (await apiClient.requestOtp(normalizedEmail)).data;
+      const nextChallenge = (await apiClient.requestOtp(normalizedEmail, {}, readAttribution())).data;
       setEmail(normalizedEmail);
       setChallenge(nextChallenge);
       setOtp('');
@@ -1171,7 +1173,7 @@ export default function App() {
     setIsSubmitting(true);
     clearError();
     try {
-      const nextChallenge = (await apiClient.requestOtp(email)).data;
+      const nextChallenge = (await apiClient.requestOtp(email, {}, readAttribution())).data;
       setChallenge(nextChallenge);
       setOtp('');
     } catch {
@@ -1193,7 +1195,8 @@ export default function App() {
     setIsSubmitting(true);
     clearError();
     try {
-      const session = (await apiClient.verifyOtp(challenge?.challengeId ?? '', otp)).data;
+      const session = (await apiClient.verifyOtp(challenge?.challengeId ?? '', otp, {}, readAttribution())).data;
+      clearAttribution();
       saveSession(session);
       setAuthSession(session);
       setAccessToken(session.accessToken);
