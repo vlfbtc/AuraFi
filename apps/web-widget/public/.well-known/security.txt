@@ -1,0 +1,8 @@
+# Canal de segurança da AuraFi (RFC 9116).
+# Falhas de segurança são relatadas em privado pelo GitHub; a política explica o que incluir.
+# Renovar o campo Expires antes da data, com validade de no máximo um ano.
+Contact: https://github.com/vlfbtc/AuraFi/security/advisories/new
+Expires: 2027-10-23T23:59:59.000Z
+Preferred-Languages: pt, en
+Canonical: https://aurafi-web-widget.onrender.com/.well-known/security.txt
+Policy: https://github.com/vlfbtc/AuraFi/blob/main/SECURITY.md
