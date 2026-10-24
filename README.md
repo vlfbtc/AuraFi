@@ -13,6 +13,96 @@ produto ainda necessárias.
 | API | https://aurafi-api.onrender.com |
 | Web Widget | https://aurafi-web-widget.onrender.com |
 
+## Fase 7 — lançamento
+
+A fase final preparou o projeto para receber a campanha "Entenda antes de
+mexer". O produto continua sem custódia, sem conexão de carteira e sem execução
+de ordens; as mudanças servem à divulgação e à medição sem rastrear pessoas.
+
+| Recurso | Endereço |
+| --- | --- |
+| Página da campanha | https://aurafi-web-widget.onrender.com/entenda/ |
+| Site (Web Widget) | https://aurafi-web-widget.onrender.com |
+| API | https://aurafi-api.onrender.com |
+| Política de segurança | [SECURITY.md](SECURITY.md) e https://aurafi-web-widget.onrender.com/.well-known/security.txt |
+
+O que mudou:
+
+- **Título e descrição.** A tela inicial passa a dizer "Entenda antes de mexer
+  nas suas stablecoins." (igual em `index.html` e em `renderWelcome`, no
+  `App.tsx`), e a descrição para buscadores, Open Graph, X e dados
+  estruturados deixa de falar em comparar e em ano.
+- **Imagem de compartilhamento e ícones.** `public/og-image.png` (1200×630),
+  `favicon.svg`, `favicon.ico` e `apple-touch-icon.png` (180×180), com as
+  cores do site; `og:image` absoluto, dimensões, texto alternativo e cartão
+  `summary_large_image`. As URLs absolutas mudam com o domínio próprio.
+- **Página da campanha `/entenda/`.** Página extra do Vite
+  (`apps/web-widget/entenda/index.html`), com a política de segurança de
+  conteúdo do build, o CSS do site e HTML legível sem JavaScript: o problema,
+  o que a Aura ajuda a entender, o que a AuraFi não faz, perguntas frequentes,
+  a regra de proteção e só os canais oficiais que existem hoje (site e
+  repositório). Não mostra lista de oportunidades, números de rendimento,
+  simulador, comparação nem vídeo incorporado; `tests/unit/test_campaign_page.py`
+  falha se algum termo proibido aparecer. Está no `sitemap.xml`, e o
+  `render.yaml` reescreve `/entenda` (sem barra) para a mesma página.
+  "Começar meu perfil" leva a `/#comecar`, que abre direto a etapa do e-mail.
+- **Contagem agregada da origem dos cadastros.** O site lê só `utm_source`,
+  `utm_medium` e `utm_campaign`, guarda nesta aba (sem cookie), limpa a barra
+  de endereço e envia a origem no pedido e na confirmação do código. A API
+  compara cada valor com a lista fechada abaixo (fora dela vira `outro`; sem
+  valor, `direto`) e soma 1 na tabela `acquisition_weekly` (migration 004):
+  semana, fonte, meio, campanha, pedidos de código e contas criadas. Não há
+  conta, e-mail, IP, cookie nem instante mais preciso que a semana, e a origem
+  nunca fica gravada no pedido de código, na conta ou no registro de eventos.
+  Pedidos de código só contam quando podem abrir uma conta nova; entrar numa
+  conta existente não soma nada. "Como usamos seus dados" ganhou a linha
+  "Contamos, sem identificar ninguém, quantos cadastros vieram de cada
+  campanha." no site e no app; a tela de consentimento ("Métricas de uso ficam
+  desativadas") e a versão da política não mudaram.
+- **Consulta de funil.** `analytics/sql/funil_operacional.sql`, só leitura:
+  contas confirmadas, perfil declarado, ativação em 7 dias, simulação, alertas
+  lidos e a contagem de origem por semana, sem a conta semente e sem a fonte
+  `teste`.
+- **Canal de segurança.** `security.txt` (RFC 9116) e [SECURITY.md](SECURITY.md)
+  apontam para o reporte privado de vulnerabilidades do GitHub. O dono do
+  repositório precisa ativá-lo em Settings → Code security → Private
+  vulnerability reporting. O campo `Expires` do `security.txt` vence em
+  2027-10-23 e deve ser renovado antes.
+
+O repositório é público para consulta e não traz arquivo de licença.
+
+### Convenção de origem (links de campanha)
+
+| Parâmetro | Valores aceitos |
+| --- | --- |
+| `utm_source` | `perfil_a`, `perfil_b`, `perfil_c`, `perfil_d`, `google`, `meta`, `youtube`, `x`, `linkedin`, `tiktok`, `podcast`, `teste` (reservado para ensaios, fora dos relatórios) |
+| `utm_medium` | `influenciador`, `busca_paga`, `video_pago`, `social_pago`, `social_organico`, `video_organico`, `indicacao` |
+| `utm_campaign` | `entenda_onda1`, `entenda_onda2`, `piloto_onda3` |
+
+Qualquer outro valor conta como `outro`, e nenhum texto livre é gravado. Sem
+parâmetro, o cadastro conta como `direto`. Outros parâmetros, inclusive
+`gclid` e `fbclid`, são descartados. A lista vive em
+`services/acquisition/counts.py` e nos `CHECK` da migration 004 e do esquema
+SQLite; um teste falha se as três divergirem.
+
+### Roteiro curto de demonstração
+
+1. Abrir `https://aurafi-web-widget.onrender.com/entenda/?utm_source=teste&utm_medium=video_organico&utm_campaign=entenda_onda1`
+   e mostrar a barra de endereço perdendo os parâmetros.
+2. Rolar a página: o que a AuraFi não faz, a regra de proteção e os canais
+   oficiais.
+3. "Começar meu perfil" → e-mail de teste nunca usado → código → cinco
+   perguntas → resultado.
+4. Painel com "DeFiLlama · fonte de mercado" → uma oportunidade → "Simular
+   alocação".
+5. Consentimento da Aura (memória desligada) → uma pergunta.
+6. "Privacidade e dados": "Como usamos seus dados", "Baixar meus dados" e
+   "Apagar minha conta" (mostrar o aviso e cancelar). Depois da gravação,
+   apagar a conta de teste.
+
+Para ver a página localmente: `npm run build && npx vite preview` em
+`apps/web-widget` e abrir `http://localhost:4173/entenda/`.
+
 ## Banco de dados em nuvem
 
 A persistência de produção roda em **PostgreSQL gerenciado na Render** (serviço
@@ -22,8 +112,19 @@ A persistência de produção roda em **PostgreSQL gerenciado na Render** (servi
 
 O adapter fica em `database/postgres/repository.py` e espelha, método a método, o
 contrato do adapter local `database/local/repository.py`. As migrations estão
-versionadas em `database/migrations/001_initial_operational.sql` e
-`002_runtime_state_and_idempotency.sql`.
+versionadas em `database/migrations/` e são aplicadas na ordem do número; cada
+uma recusa uma segunda execução e se registra em `aurafi.schema_migrations`.
+A API aplica sozinha, ao iniciar, as que ainda não estiverem registradas:
+
+| Migration | O que faz |
+| --- | --- |
+| `001_initial_operational.sql` | Modelo operacional inicial (contas, códigos, sessões, perfil, conversas, simulações, alertas) |
+| `002_runtime_state_and_idempotency.sql` | Resumos de código e de token, estado da conversa e respostas de idempotência |
+| `003_account_erasure.sql` | Perfil de risco apagável só dentro da exclusão da conta |
+| `004_acquisition_counts.sql` | Contagem agregada da origem dos cadastros, por semana e sem dado pessoal (Fase 7) |
+
+O SQLite local usa o esquema equivalente em `database/local/schema.sql`,
+reaplicado com segurança a cada inicialização.
 
 Para verificar qual persistência está ativa em produção:
 
@@ -38,20 +139,19 @@ Para rodar a suíte de integração contra um PostgreSQL real:
 
 ```bash
 createdb aurafi_test
-psql -d aurafi_test -f database/migrations/001_initial_operational.sql
-psql -d aurafi_test -f database/migrations/002_runtime_state_and_idempotency.sql
+for f in database/migrations/*.sql; do psql -d aurafi_test -v ON_ERROR_STOP=1 -f "$f"; done
 AURAFI_TEST_DATABASE_URL="dbname=aurafi_test" \
   python3.12 -m unittest tests.integration.test_postgres_repository -v
 ```
 
 ## Estrutura atual
 
-- `apps/web-widget`: Web Widget atual, Vite + React + TypeScript.
+- `apps/web-widget`: Web Widget atual, Vite + React + TypeScript, e a página da campanha (`entenda/index.html`).
 - `apps/ios`: aplicativo nativo SwiftUI para iOS 17 ou superior.
 - `services/api`: API HTTP (biblioteca padrão do Python) que orquestra os serviços de domínio.
-- `services/*`: identidade e OTP, mercado (DeFiLlama), conversa da Aura (Claude), recomendação, simulação e alertas.
+- `services/*`: identidade e OTP, mercado (DeFiLlama), conversa da Aura (Claude), recomendação, simulação, alertas e contagem agregada da origem dos cadastros.
 - `database`: adapters de persistência (PostgreSQL gerenciado e SQLite local), migrations e artefatos do DW.
-- `analytics`: validação da camada analítica.
+- `analytics`: validação da camada analítica e consulta de funil sobre o banco operacional (`analytics/sql/`).
 - `contracts`: contratos HTTP/OpenAPI e envelopes de mensagem.
 - `tests`: testes unitários, integração, contrato e validações.
 
