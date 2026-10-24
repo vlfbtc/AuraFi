@@ -140,8 +140,6 @@ integral dos artefatos de escopo e o confronto com o código executável
 
 Pendências da Fase 7 que dependem do dono do repositório ou da publicação:
 
-- ativar o reporte privado de vulnerabilidades em Settings → Code security
-  (hoje desligado; sem isso o `Contact` do `security.txt` não recebe relatos);
 - depois da publicação, conferir `/entenda/`, `/entenda`, `/og-image.png`,
   `/favicon.svg` e `/.well-known/security.txt` no site publicado, e o cartão
   num inspetor de links;

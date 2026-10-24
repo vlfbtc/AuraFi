@@ -64,9 +64,8 @@ O que mudou:
   lidos e a contagem de origem por semana, sem a conta semente e sem a fonte
   `teste`.
 - **Canal de segurança.** `security.txt` (RFC 9116) e [SECURITY.md](SECURITY.md)
-  apontam para o reporte privado de vulnerabilidades do GitHub. O dono do
-  repositório precisa ativá-lo em Settings → Code security → Private
-  vulnerability reporting. O campo `Expires` do `security.txt` vence em
+  apontam para o reporte privado de vulnerabilidades do GitHub, que está
+  ativado no repositório. O campo `Expires` do `security.txt` vence em
   2027-10-23 e deve ser renovado antes.
 
 O repositório é público para consulta e não traz arquivo de licença.
