@@ -93,8 +93,9 @@ SQLite; um teste falha se as três divergirem.
    oficiais.
 3. "Começar meu perfil" → e-mail de teste nunca usado → código → cinco
    perguntas → resultado.
-4. Painel com "DeFiLlama · fonte de mercado" → uma oportunidade → "Simular
-   alocação".
+4. Painel com "DeFiLlama · fonte de mercado" → uma oportunidade → "Abrir
+   detalhe" → "Iniciar simulação educativa" → "Gerar simulação educativa"
+   ("Simular alocação" é o nome do botão no app iOS).
 5. Consentimento da Aura (memória desligada) → uma pergunta.
 6. "Privacidade e dados": "Como usamos seus dados", "Baixar meus dados" e
    "Apagar minha conta" (mostrar o aviso e cancelar). Depois da gravação,
