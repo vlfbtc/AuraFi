@@ -22,7 +22,7 @@ function escapeAttribute(value: string): string {
 }
 
 /**
- * Adds the Content-Security-Policy meta tag to the built index.html. Build only:
+ * Adds the Content-Security-Policy meta tag to every built page. Build only:
  * the dev server relies on inline scripts (React Fast Refresh) and websockets
  * that this policy would block. The app loads no external fonts, images or
  * scripts, so the only origin beyond 'self' is the API it calls. frame-ancestors
@@ -63,8 +63,33 @@ function contentSecurityPolicy(): Plugin {
   };
 }
 
+/**
+ * Serves /entenda (no trailing slash) as /entenda/ in the dev server and in
+ * `vite preview`, as the rewrite rule in render.yaml does for the static site.
+ */
+function campaignPageWithoutSlash(): Plugin {
+  const rewrite = (req: { url?: string }, _res: unknown, next: () => void) => {
+    const url = req.url ?? '';
+    const queryStart = url.indexOf('?');
+    const path = queryStart === -1 ? url : url.slice(0, queryStart);
+    if (path === '/entenda') req.url = `/entenda/${queryStart === -1 ? '' : url.slice(queryStart)}`;
+    next();
+  };
+  return {
+    name: 'aurafi-campaign-page-without-slash',
+    configureServer(server) {
+      server.middlewares.use(rewrite);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(rewrite);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), contentSecurityPolicy()],
+  plugins: [react(), contentSecurityPolicy(), campaignPageWithoutSlash()],
+  // Two real pages, so an unknown path is a 404 instead of the app's index.html.
+  appType: 'mpa',
   server: {
     host: 'localhost',
     port: 5173,
@@ -72,5 +97,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      // Every HTML entry goes through transformIndexHtml, so each page gets the
+      // Content-Security-Policy above. A page dropped in public/ would not.
+      // Paths are relative to the project root (this folder).
+      input: {
+        main: 'index.html',
+        entenda: 'entenda/index.html',
+      },
+    },
   },
 });

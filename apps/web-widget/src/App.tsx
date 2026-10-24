@@ -313,8 +313,10 @@ const SAVED_PLANS_KEY = 'aurafi-widget-saved-plans-v1';
 const AUTH_SESSION_KEY = 'aurafi-widget-auth-session-v1';
 const CONVERSATION_KEY = 'aurafi-widget-conversation-v1';
 const CONVERSATION_CONSENT_KEY = 'aurafi-widget-conversation-consent-v1';
-/** Every key this app writes to sessionStorage or localStorage starts with it. */
+/** Every key this app writes to sessionStorage or localStorage starts with it
+ *  (the campaign origin in attribution.ts included). */
 const STORAGE_KEY_PREFIX = 'aurafi-widget-';
+const START_HASH = '#comecar';
 
 const CONSENT_ITEMS: readonly string[] = [
   'Métricas de uso ficam desativadas',
@@ -352,6 +354,21 @@ function readSession(): AuthSession | null {
     return null;
   }
 }
+
+/** "Começar meu perfil" on the campaign page links to /#comecar: the visitor
+ *  already chose to start, so the e-mail step opens instead of the welcome
+ *  screen. The hash is removed so a reload or a shared link starts clean. */
+function consumeStartRequest(): boolean {
+  if (typeof window === 'undefined' || window.location.hash !== START_HASH) return false;
+  try {
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+  } catch {
+  }
+  return true;
+}
+
+// Read once, when the page loads; the state initializer stays pure.
+const START_REQUESTED = consumeStartRequest();
 
 function saveSession(value: AuthSession | null): void {
   if (typeof window === 'undefined') return;
@@ -715,7 +732,7 @@ function ProgressBar({ current }: { current: number }) {
 export default function App() {
   const [restoredSession] = useState<AuthSession | null>(() => readSession());
   const [authSession, setAuthSession] = useState<AuthSession | null>(restoredSession);
-  const [view, setView] = useState<View>(() => restoredSession ? 'dashboard' : 'welcome');
+  const [view, setView] = useState<View>(() => restoredSession ? 'dashboard' : START_REQUESTED ? 'email' : 'welcome');
   const [email, setEmail] = useState(() => restoredSession?.email ?? '');
   const [accessToken, setAccessToken] = useState<string | null>(() => restoredSession && Date.parse(restoredSession.expiresAt) > Date.now() ? restoredSession.accessToken : null);
   const [challenge, setChallenge] = useState<OtpChallenge | null>(null);
@@ -1557,7 +1574,7 @@ export default function App() {
           </div>
         ) : null}
         <p className="eyebrow">AuraFi · Clareza para investir</p>
-        <h1 id="welcome-title" ref={headingRef} tabIndex={-1}>Onde colocar suas stablecoins em 2026.</h1>
+        <h1 id="welcome-title" ref={headingRef} tabIndex={-1}>Entenda antes de mexer nas suas stablecoins.</h1>
         <p className="lead">Uma conversa clara para estudar oportunidades DeFi, declarar seu perfil e entender os próximos passos antes de decidir.</p>
         <button className="primary-button" type="button" onClick={startOnboarding}>
           Começar meu perfil <span aria-hidden="true">→</span>

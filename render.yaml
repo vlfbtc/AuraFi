@@ -87,6 +87,12 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     autoDeployTrigger: commit
+    # The campaign page lives at /entenda/ (dist/entenda/index.html). A rewrite,
+    # not a redirect, serves it at /entenda too and cannot loop.
+    routes:
+      - type: rewrite
+        source: /entenda
+        destination: /entenda/index.html
     # The rest of the Content-Security-Policy ships as a <meta> tag injected at
     # build time (vite.config.ts); frame-ancestors only works as a header.
     headers:
