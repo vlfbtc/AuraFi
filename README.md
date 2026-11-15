@@ -308,9 +308,10 @@ O perfil de produção exige:
 - origens HTTPS explícitas em `AURAFI_ALLOWED_ORIGINS`;
 - volume persistente em `/data` enquanto o adapter SQLite de instância única for usado.
 
-Opcional em produção: `AURAFI_RETENTION_PURGE=true` liga a rotina que remove
-códigos vencidos, respostas antigas de idempotência e contas nunca confirmadas
-(fora de produção ela já vem ligada; `off` desliga).
+Em produção, `AURAFI_RETENTION_PURGE=true` (já definido no `render.yaml`) liga
+a rotina que remove códigos vencidos, respostas antigas de idempotência e contas
+nunca confirmadas; sem a variável, ela fica desligada (fora de produção ela já
+vem ligada; `off` desliga).
 
 O processo da API grava eventos de segurança e de privacidade no log, uma linha
 JSON por evento (`services/api/security_log.py`). Nunca entram código, token,
@@ -338,7 +339,8 @@ réplicas, esse estado precisa migrar para um cache compartilhado.
 
 O [render.yaml](render.yaml) provisiona esse perfil no Render com uma réplica,
 health check em `/health`, disco persistente em `/data` e geração automática do
-pepper. O Blueprint já configura o SMTP do Resend em `smtp.resend.com:587`, com
+pepper. A API e o site só são publicados depois que os checks do CI passam no
+commit (`autoDeployTrigger: checksPass`). O Blueprint já configura o SMTP do Resend em `smtp.resend.com:587`, com
 STARTTLS e usuário `resend`. No dashboard, informe:
 
 - `AURAFI_OTP_SMTP_PASSWORD`: a chave Resend completa iniciada por `re_`;

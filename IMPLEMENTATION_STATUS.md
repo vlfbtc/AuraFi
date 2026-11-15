@@ -1,8 +1,9 @@
 # AuraFi — status de implementação
 
-Atualizado em 2026-10-24, na preparação do lançamento (Fase 7). A auditoria
-integral dos artefatos de escopo e o confronto com o código executável
-(backend, analytics, web widget e app iOS) são de 2026-08-29.
+Atualizado em 2026-11-15, com as correções do produto pedidas pela banca do
+TCC (seção "Correções pedidas pela banca", abaixo). A auditoria integral dos
+artefatos de escopo e o confronto com o código executável (backend, analytics,
+web widget e app iOS) são de 2026-08-29.
 
 ## Entregue e validado
 
@@ -17,7 +18,8 @@ integral dos artefatos de escopo e o confronto com o código executável
 - Persistência SQLite de identidade canônica, identidades por canal, sessões,
   perfil de risco, consentimento, conversas, mensagens e alertas.
 - Dados de mercado reais via API pública da DeFiLlama, com origem, frescor e
-  fallback degradado explicitados na resposta.
+  fallback degradado explicitados na resposta. Só entram pools que a fonte
+  marca com `stablecoin: true` e cujo ativo é USDT, USDC ou DAI.
 - Conversão informativa USD/BRL via PTAX do Banco Central, com marcação de
   cotação em cache quando aplicável.
 - Hub conversacional real via Anthropic, com histórico condicionado ao
@@ -82,7 +84,7 @@ integral dos artefatos de escopo e o confronto com o código executável
 - Retenção (`database/account_data.py`): no máximo uma vez por hora, remove
   códigos vencidos há mais de 24 h, respostas de idempotência com mais de 24 h
   e contas nunca confirmadas há mais de 7 dias. Em produção, só roda com
-  `AURAFI_RETENTION_PURGE=true`.
+  `AURAFI_RETENTION_PURGE=true`, que o `render.yaml` define desde 2026-11-15.
 - Limite de mensagens à Aura contado por conta (renovar a sessão ou entrar de
   novo não zera o limite).
 - Respostas da API com `X-Content-Type-Options`, `X-Frame-Options`,
@@ -224,6 +226,18 @@ não definem regras aprovadas suficientes:
 - canais WhatsApp e Telegram e seus respectivos provedores;
 - planos free/premium/plus e provedor de cobrança (modelados no DW, sem
   cobrança no app).
+
+## Correções pedidas pela banca (2026-11-15)
+
+| Pendência | Mudança | Teste que comprova |
+|---|---|---|
+| U2, texto do risco | Site e app dizem que o nível é estimado pela AuraFi a partir de APY e TVL e o que ele não avalia (`App.tsx`, `DashboardView.swift`) | `tests/unit/test_risk_copy.py` |
+| U1, filtro de stablecoins | `DeFiLlamaAdapter` filtra pelo campo `stablecoin` e pelos ativos USDT, USDC e DAI; vale para lista, detalhe, simulação, alertas e Aura | `tests/integration/test_stablecoin_universe.py`, com leitura gravada da fonte em `tests/fixtures/` |
+| Questionário diferente | Perguntas e pontuação únicas em `contracts/risk-questionnaire.json`, `riskQuestionnaire.ts` e `RiskQuestionnaire.swift` | `tests/unit/test_risk_questionnaire.py` e `RiskQuestionnaireTests` (iOS) |
+| Retenção desligada | `AURAFI_RETENTION_PURGE=true` no `render.yaml` | `tests/integration/test_retention_production.py`, `tests/unit/test_render_blueprint.py` |
+| Banco declarado como gratuito | `plan: basic-256mb` no banco `aurafi-db` do `render.yaml` | `tests/unit/test_render_blueprint.py` |
+| Publicação antes do CI | `autoDeployTrigger: checksPass` nos dois serviços | `tests/unit/test_render_blueprint.py` |
+| "risco low" na Aura | Nível traduzido (baixo, médio, alto) no contexto e nas respostas | `tests/unit/test_services.py`, `tests/integration/test_stablecoin_universe.py` |
 
 ## Próximas evoluções técnicas
 
