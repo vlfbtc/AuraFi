@@ -127,6 +127,10 @@ interface DecisionRecord {
 
 const IS_FIXTURE_MODE = widgetApi.mode === 'fixture';
 
+// O nível de risco vem da heurística derive_risk_level do BFF
+// (services/market_data/presentation.py), não da fonte.
+const RISK_ESTIMATE_NOTE = 'Nível estimado pela AuraFi a partir de APY e TVL (e da auditoria, quando a fonte a informa). Não avalia contrato, paridade, liquidez nem governança, e não indica adequação ao seu perfil.';
+
 const questions: readonly Question[] = [
   {
     id: 'q1',
@@ -284,7 +288,7 @@ function mapApiOpportunity(item: ApiOpportunity): SyntheticOpportunity {
     liquidity: { level: item.liquidity.level, observedAt: item.liquidity.observedAt },
     risk: { level: item.risk.level, dimensions: item.risk.dimensions },
     auditStatus: item.auditStatus ?? 'unknown',
-    gasEstimate: 'Não informado pela fonte',
+    gasEstimate: 'Não disponível na fonte',
     dataSource: {
       source: item.dataSource.source,
       mode: item.dataSource.mode,
@@ -1784,7 +1788,7 @@ export default function App() {
           <article className="overview-card overview-market-card">
             <div className="overview-card-head"><span className="card-kicker">Mercado observado</span><span className="overview-icon" aria-hidden="true">↗</span></div>
             <strong>{dashboardOpportunities.length} <small>oportunidades</small></strong>
-            <p>Dados comparáveis por APY, TVL, liquidez e risco informado.</p>
+            <p>Dados comparáveis por APY, TVL, liquidez e risco estimado.</p>
             <div className="overview-foot"><span>Última leitura</span><strong>{opportunityMeta ? formatDateTime(opportunityMeta.generatedAt) : 'aguardando leitura'}</strong></div>
           </article>
           <article className="overview-card overview-profile-card">
@@ -1861,7 +1865,7 @@ export default function App() {
                   <div className="opportunity-metrics">
                     <div><span>APY observado</span><strong>{opportunity.apy.display ?? formatPercent(opportunity.apy.value)}</strong></div>
                     <div><span>TVL observado</span><strong>{opportunity.tvl.displayCompact ?? `${opportunity.tvl.currency} ${opportunity.tvl.value.toLocaleString('pt-BR')}`}</strong></div>
-                    <div><span>Risco informado</span><strong>{riskLabel(opportunity.risk.level)}</strong></div>
+                    <div><span>Risco estimado</span><strong>{riskLabel(opportunity.risk.level)}</strong></div>
                   </div>
                   {/* Source and freshness stated once each: this row used to
                       repeat "dados atualizados"/"atualizado nesta leitura" and
@@ -1880,7 +1884,7 @@ export default function App() {
 
         {renderDecisionHistory()}
 
-        <p className="disclaimer"><strong>Importante:</strong> APY, TVL, risco, auditoria e gas são campos observados ou ilustrativos, não garantias de retorno. Este painel não acessa wallet, não executa transações e não constitui recomendação personalizada.</p>
+        <p className="disclaimer"><strong>Importante:</strong> APY, TVL, auditoria e gas são campos observados ou ilustrativos, e o nível de risco é uma estimativa da AuraFi; nada disso é garantia de retorno. Este painel não acessa wallet, não executa transações e não constitui recomendação personalizada.</p>
       </section>
     );
   };
@@ -2045,7 +2049,7 @@ export default function App() {
           {!conversation || conversation.messages.length === 0 ? (
             <div className="hub-empty">
               <span className="aura-avatar" aria-hidden="true">A</span>
-              <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, os riscos informados e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
+              <div><strong>Olá, sou a Aura.</strong><p>Posso explicar os dados do painel, o nível de risco estimado e as premissas das simulações. Não executo operações e não prometo retorno.</p></div>
             </div>
           ) : conversation.messages.map((message) => (
             <article className={`chat-message ${message.messageType === 'user_message' ? 'from-user' : 'from-aura'}${message.messageId.startsWith('pending_') ? ' is-pending' : ''}`} key={message.messageId}>
@@ -2212,7 +2216,7 @@ export default function App() {
         </div>
 
         <div className="detail-columns">
-          <section className="detail-card" aria-labelledby="risk-title"><p className="eyebrow">Leitura de risco</p><h2 id="risk-title">O que está informado</h2><div className="risk-callout"><span className={`risk-indicator ${opportunity.risk.level}`} aria-hidden="true" /><strong>{riskLabel(opportunity.risk.level)}</strong></div><p className="detail-note">Este nível é informado pela fonte e não representa adequação ao seu perfil. A AuraFi não calcula score, pesos ou limiar financeiro.</p><ul className="dimension-list">{opportunity.risk.dimensions.map((dimension) => <li key={dimension}>{dimension.replaceAll('_', ' ')}</li>)}</ul></section>
+          <section className="detail-card" aria-labelledby="risk-title"><p className="eyebrow">Leitura de risco</p><h2 id="risk-title">Como o nível é estimado</h2><div className="risk-callout"><span className={`risk-indicator ${opportunity.risk.level}`} aria-hidden="true" /><strong>{riskLabel(opportunity.risk.level)}</strong></div><p className="detail-note">{RISK_ESTIMATE_NOTE}</p><ul className="dimension-list">{opportunity.risk.dimensions.map((dimension) => <li key={dimension}>{dimension.replaceAll('_', ' ')}</li>)}</ul></section>
           <section className="detail-card" aria-labelledby="source-title"><p className="eyebrow">Origem e atualização</p><h2 id="source-title">Fonte e frescor</h2><dl className="source-list"><div><dt>Fonte</dt><dd>DeFiLlama · informativo</dd></div><div><dt>Atualização</dt><dd>{dataModeLabel(opportunity.dataSource.mode)}</dd></div><div><dt>Observado em</dt><dd>{formatDateTime(opportunity.dataSource.observedAt)}</dd></div><div><dt>Recuperado em</dt><dd>{formatDateTime(opportunity.dataSource.retrievedAt)}</dd></div><div><dt>Estado</dt><dd>{opportunity.dataSource.isStale ? 'Atualização pendente' : 'Leitura atual'}</dd></div></dl></section>
         </div>
 

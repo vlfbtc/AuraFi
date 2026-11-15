@@ -1084,7 +1084,9 @@ private struct OpportunityExplainerCard: View {
             result.append(Point(
                 icon: "shield.lefthalf.filled",
                 title: "Risco \(opportunity.riskLabel.lowercased())",
-                detail: "Considera o contrato, a liquidez e o ativo por trás. Em geral, risco maior vem com chance de ganho maior e de perda maior."
+                detail: opportunity.risk.isEstimated
+                    ? "Estimado pela AuraFi a partir de APY e TVL. Não avalia contrato, paridade, liquidez nem governança. Em geral, risco maior vem com chance de ganho maior e de perda maior."
+                    : "Nível que a fonte publica para este pool. Em geral, risco maior vem com chance de ganho maior e de perda maior."
             ))
         default:
             break
