@@ -276,7 +276,10 @@ paths:
       description: >-
         Consulta somente leitura. Os campos de mercado sempre informam fonte,
         momento observado, momento de recuperação e eventual uso de cache ou
-        fallback.
+        fallback. A lista só traz pools que a DeFiLlama marca com
+        `stablecoin: true` e cujo ativo é USDT, USDC ou DAI; pares de liquidez
+        e outras moedas estáveis ficam de fora. O mesmo universo vale para o
+        detalhe, a simulação e o contexto da Aura.
       operationId: listOpportunities
       security:
         - bearerAuth: []
@@ -293,7 +296,7 @@ paths:
             $ref: '#/components/schemas/RiskProfileLevel'
         - name: asset
           in: query
-          description: Filtra pelo símbolo do ativo estável.
+          description: Filtra pelo símbolo do ativo estável (USDT, USDC ou DAI).
           required: false
           schema:
             type: string

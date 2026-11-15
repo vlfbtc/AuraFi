@@ -751,6 +751,7 @@ class ApiSmokeTests(unittest.TestCase):
                             "project": "Aave",
                             "poolMeta": "USDC Supply",
                             "symbol": "USDC",
+                            "stablecoin": True,
                             "chain": "Base",
                             "apy": 5.25,
                             "tvlUsd": 1_500_000,
@@ -836,7 +837,7 @@ class ApiSmokeTests(unittest.TestCase):
                     data = [
                         {
                             "pool": "pool-1", "project": "Aave", "poolMeta": "USDC Supply",
-                            "symbol": "USDC", "chain": "Ethereum", "apy": 5.0,
+                            "symbol": "USDC", "stablecoin": True, "chain": "Ethereum", "apy": 5.0,
                             "tvlUsd": 2_000_000_000, "observed_at": "2026-08-29T12:00:00Z",
                         },
                     ]
@@ -844,12 +845,12 @@ class ApiSmokeTests(unittest.TestCase):
                     data = [
                         {
                             "pool": "pool-1", "project": "Aave", "poolMeta": "USDC Supply",
-                            "symbol": "USDC", "chain": "Ethereum", "apy": 8.5,
+                            "symbol": "USDC", "stablecoin": True, "chain": "Ethereum", "apy": 8.5,
                             "tvlUsd": 1_000_000, "observed_at": "2026-08-29T12:05:00Z",
                         },
                         {
                             "pool": "pool-2", "project": "Curve", "poolMeta": "USDT Supply",
-                            "symbol": "USDT", "chain": "Ethereum", "apy": 4.0,
+                            "symbol": "USDT", "stablecoin": True, "chain": "Ethereum", "apy": 4.0,
                             "tvlUsd": 500_000_000, "observed_at": "2026-08-29T12:05:00Z",
                         },
                     ]

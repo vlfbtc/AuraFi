@@ -92,6 +92,7 @@ class MarketStub:
                 "project": "Aave",
                 "poolMeta": "USDC Supply",
                 "symbol": "USDC",
+                "stablecoin": True,
                 "chain": "Ethereum",
                 "apy": apy,
                 "tvlUsd": 500_000_000,

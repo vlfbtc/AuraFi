@@ -20,6 +20,11 @@ from uuid import UUID
 ReadMode = Literal["auto", "live", "cache", "test", "fallback"]
 JsonPayload = Mapping[str, Any] | Sequence[Mapping[str, Any]]
 
+# Universo do produto: pools que a própria DeFiLlama marca com ``stablecoin``
+# verdadeiro e cujo ativo é uma das três stablecoins acompanhadas. Pares de
+# liquidez (por exemplo "USDC-USDT") e outras moedas estáveis ficam de fora.
+STABLECOIN_ASSETS: tuple[str, ...] = ("USDT", "USDC", "DAI")
+
 
 class MarketDataError(RuntimeError):
     """Erro controlado de configuração, leitura ou normalização."""
@@ -189,6 +194,7 @@ class DeFiLlamaSchema:
             "risk_level": ("risk_level", "riskLevel", "risk.level"),
             "risk_dimensions": ("risk_dimensions", "riskDimensions", "risk.dimensions"),
             "audit_status": ("audit_status", "auditStatus"),
+            "stablecoin": ("stablecoin",),
             "observed_at": (
                 "observed_at",
                 "timestamp",
@@ -263,6 +269,7 @@ class SyntheticFallback:
                     "poolMeta": "Stable Pool A",
                     "symbol": "USDC",
                     "chain": "Ethereum",
+                    "stablecoin": True,
                     "apy": 5.2,
                     "tvlUsd": 1_250_000,
                     "liquidity_level": "high",
@@ -296,6 +303,7 @@ class DeFiLlamaAdapter:
         timeout_seconds: float = 5.0,
         cache_key: str = "defillama:market-data",
         fx_base_url: str | None = None,
+        stablecoin_assets: Sequence[str] = STABLECOIN_ASSETS,
     ) -> None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds deve ser maior que zero")
@@ -311,6 +319,9 @@ class DeFiLlamaAdapter:
         self.ttl_seconds = ttl_seconds
         self.timeout_seconds = timeout_seconds
         self.cache_key = cache_key
+        self.stablecoin_assets = frozenset(asset.strip().upper() for asset in stablecoin_assets)
+        if not self.stablecoin_assets:
+            raise ValueError("stablecoin_assets não pode ser vazio")
         from .enrichment import MarketDetailEnricher
 
         self.detail_enricher = MarketDetailEnricher(
@@ -465,6 +476,16 @@ class DeFiLlamaAdapter:
         items = _items_from_payload(payload, self.schema)
         if not items:
             raise MarketDataError("A resposta da DeFiLlama não contém oportunidades")
+        # O filtro vem antes da normalização: lista, detalhe, simulação, alertas
+        # e o aterramento da Aura leem todos este mesmo snapshot.
+        items = [
+            item for item in items
+            if is_supported_stablecoin_pool(item, self.schema, self.stablecoin_assets)
+        ]
+        if not items:
+            raise MarketDataError(
+                "A resposta da DeFiLlama não contém pools de stablecoin acompanhadas"
+            )
         observed_at = _observed_at_from_payload(payload, items, self.schema, retrieved_at)
         if observed_at == retrieved_at and not freshness_note:
             freshness_note = (
@@ -519,6 +540,25 @@ def _items_from_payload(payload: JsonPayload, schema: DeFiLlamaSchema) -> list[M
     if not all(isinstance(item, Mapping) for item in value):
         raise MarketDataError("Cada oportunidade externa deve ser um objeto")
     return list(value)
+
+
+def is_supported_stablecoin_pool(
+    item: Mapping[str, Any],
+    schema: DeFiLlamaSchema,
+    assets: frozenset[str] | Sequence[str] = STABLECOIN_ASSETS,
+) -> bool:
+    """Diz se a pool entra no universo da AuraFi.
+
+    Exige as duas condições: a fonte marca ``stablecoin`` como ``true`` (sem
+    o campo, a pool fica de fora) e o ativo é exatamente um dos acompanhados.
+    """
+    if _find(item, schema, "stablecoin") is not True:
+        return False
+    asset = _find(item, schema, "asset")
+    if not isinstance(asset, str):
+        return False
+    allowed = assets if isinstance(assets, frozenset) else frozenset(a.upper() for a in assets)
+    return asset.strip().upper() in allowed
 
 
 def _is_uuid(value: str) -> bool:

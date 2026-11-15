@@ -343,7 +343,7 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
             def get(self, url: str, *, timeout_seconds: float):
                 if self.fail:
                     raise OSError("fonte fora do ar")
-                return {"data": [{"pool": "p-1", "project": "P", "poolMeta": "Pool", "symbol": "USDC", "chain": "Ethereum", "apy": 5.0, "tvlUsd": 1000, "observed_at": NOW.isoformat()}]}
+                return {"data": [{"pool": "p-1", "project": "P", "poolMeta": "Pool", "symbol": "USDC", "stablecoin": True, "chain": "Ethereum", "apy": 5.0, "tvlUsd": 1000, "observed_at": NOW.isoformat()}]}
 
         clock = MutableClock()
         http = Http()
@@ -375,6 +375,7 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
                         "project": "P",
                         "poolMeta": "Pool",
                         "symbol": "USDC",
+                        "stablecoin": True,
                         "chain": "Base",
                         "apy": 5.0,
                         "tvlUsd": 1000.0,
@@ -409,8 +410,9 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
                 return {
                     "data": [{
                         "pool": "747c1d2a-c668-4682-b9f9-296708a3dd90",
-                        "project": "lido",
-                        "symbol": "STETH",
+                        "project": "aave-v3",
+                        "symbol": "USDT",
+                        "stablecoin": True,
                         "chain": "Ethereum",
                         "apy": 2.2,
                         "tvlUsd": 1000,
@@ -426,7 +428,7 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
         )
         item = adapter.read(mode="live").items[0]
         self.assertEqual(item.opportunity_id, "747c1d2a-c668-4682-b9f9-296708a3dd90")
-        self.assertEqual(item.pool, "STETH pool")
+        self.assertEqual(item.pool, "USDT pool")
 
     def test_market_data_prioriza_nome_humano_do_pool(self) -> None:
         class Http:
@@ -437,6 +439,7 @@ class RecommendationAndMarketDataTests(unittest.TestCase):
                         "project": "maple",
                         "poolMeta": "Syrup USDC",
                         "symbol": "USDC",
+                        "stablecoin": True,
                         "chain": "Ethereum",
                         "apy": 5.1,
                         "tvlUsd": 1000,
