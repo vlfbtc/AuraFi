@@ -794,6 +794,9 @@ class SimulationAndConversationTests(unittest.TestCase):
         grounding = provider.request.grounding
         self.assertIn("DeFiLlama", grounding)
         self.assertIn("lido · STETH · Ethereum", grounding)
+        self.assertIn("risco médio", grounding)
+        self.assertNotRegex(grounding, r"risco (low|medium|high)\b")
+        self.assertIn("estimativa da AuraFi a partir de APY e TVL", grounding)
         self.assertIn("2,18% a.a.", grounding)
         self.assertIn("US$ 18,0 bi", grounding)
         self.assertIn("2026-08-07T10:00:00Z", grounding)
@@ -863,7 +866,8 @@ class SimulationAndConversationTests(unittest.TestCase):
         ]
         text = service._recommendation_pivot(False, opportunities, _Profile())
         self.assertIn("Perfil conservador", text)
-        self.assertIn("lido · STETH (risco low)", text)
+        self.assertIn("lido · STETH (risco baixo)", text)
+        self.assertNotIn("risco low", text)
         self.assertNotIn("degen", text)
         self.assertIn("educativo", text)
 

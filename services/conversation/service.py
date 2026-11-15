@@ -1115,6 +1115,12 @@ class ConversationService:
         "moderate": {"low", "medium"},
         "aggressive": {"low", "medium", "high"},
     }
+    # Nome do nível em português, para a Aura não escrever "risco low".
+    _RISK_LABELS = {"low": "baixo", "medium": "médio", "high": "alto"}
+
+    @classmethod
+    def _risk_label(cls, tier: str) -> str:
+        return cls._RISK_LABELS.get(tier, "não estimado")
 
     @staticmethod
     def _risk_tier(attributes: Mapping[str, Any]) -> str:
@@ -1174,7 +1180,7 @@ class ConversationService:
                 continue
             head = self._opportunity_head(attrs)
             if head:
-                matched.append(f"{head} (risco {tier})")
+                matched.append(f"{head} (risco {self._risk_label(tier)})")
             if len(matched) >= 3:
                 break
 
@@ -1468,7 +1474,7 @@ class ConversationService:
             tvl = attributes.get("tvl")
             if isinstance(tvl, Mapping) and isinstance(tvl.get("value"), (int, float)):
                 parts.append(f"TVL {format_money_compact(float(tvl['value']), str(tvl.get('currency', 'USD')))}")
-            parts.append(f"risco {self._risk_tier(attributes)}")
+            parts.append(f"risco {self._risk_label(self._risk_tier(attributes))}")
             audit = attributes.get("audit_status")
             parts.append(
                 f"auditoria {audit}" if isinstance(audit, str) and audit and audit != "unknown"
@@ -1488,7 +1494,9 @@ class ConversationService:
         return (
             "DADOS DE MERCADO OBSERVADOS PELA AURAFI (fonte DeFiLlama). "
             "Você TEM acesso a estes dados; use-os como verdade para explicar riscos "
-            "e comparar oportunidades. Não invente valores além desta lista. Ao falar "
+            "e comparar oportunidades. Não invente valores além desta lista. O nível "
+            "de risco é uma estimativa da AuraFi a partir de APY e TVL; não avalia "
+            "contrato, paridade, liquidez nem governança, e não vem da fonte. Ao falar "
             "de \"oportunidades atuais\", refira-se a estas:\n"
             + "\n".join(lines)
             + observed

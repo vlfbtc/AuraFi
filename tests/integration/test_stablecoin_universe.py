@@ -194,6 +194,9 @@ class StablecoinUniverseApiTests(unittest.TestCase):
             self.assertTrue(line.startswith(f"- {protocol} · {asset} · {chain}"), line)
         for outside in ("STETH", "WEETH", "SUSDS", "CBBTC"):
             self.assertNotIn(outside, grounding)
+        # Item 7 da banca: o nível sai em português ("risco baixo"), não "risco low".
+        self.assertNotRegex(grounding, r"risco (low|medium|high)\b")
+        self.assertRegex(lines[0], r", risco (baixo|médio|alto),")
 
 
 if __name__ == "__main__":
