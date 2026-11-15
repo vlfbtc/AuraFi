@@ -1,12 +1,11 @@
 # yaml-language-server: $schema=https://render.com/schema/render.yaml.json
 databases:
-  # Free tier: no cost, but Render deletes the database (and its data) 30
-  # days after creation. Recreate it (and rotate DATABASE_URL) before that
-  # window lapses, or upgrade the plan below to a paid tier for durability.
+  # Plano pago do banco de produção, informado pelo grupo em 2026-11-15. O
+  # plano gratuito deixaria o banco inacessível 30 dias após a criação.
   - name: aurafi-db
     databaseName: aurafi
     user: aurafi
-    plan: free
+    plan: basic-256mb
 
 services:
   - type: web
@@ -15,7 +14,9 @@ services:
     plan: starter
     numInstances: 1
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # Publica só depois que os checks do GitHub (.github/workflows/ci.yml)
+    # passam no commit; com "commit", a Render publicava antes do fim do CI.
+    autoDeployTrigger: checksPass
     disk:
       name: aurafi-data
       mountPath: /data
@@ -35,6 +36,12 @@ services:
           property: connectionString
       - key: AURAFI_DB_PATH
         value: /data/aurafi.sqlite3
+      # Limpeza de retenção (database/account_data.py), no máximo uma vez por
+      # hora: códigos vencidos, respostas de idempotência com mais de 24 h e
+      # contas nunca confirmadas há mais de 7 dias. Em produção, sem esta
+      # variável, a limpeza fica desligada.
+      - key: AURAFI_RETENTION_PURGE
+        value: "true"
       - key: AURAFI_ALLOW_SELF_SIGNUP
         value: "true"
       - key: AURAFI_OTP_PROVIDER
@@ -86,7 +93,7 @@ services:
     rootDir: apps/web-widget
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
-    autoDeployTrigger: commit
+    autoDeployTrigger: checksPass
     # The campaign page lives at /entenda/ (dist/entenda/index.html). A rewrite,
     # not a redirect, serves it at /entenda too and cannot loop.
     routes:
