@@ -226,7 +226,7 @@ class DeterministicMockLlm:
     ) -> None:
         self._response = response or (
             "Posso explicar riscos, dados observados e cenários educativos. "
-            "Para uma recomendação, primeiro precisamos de um perfil declarado "
+            "Para uma recomendação, primeiro precisamos do perfil do seu questionário "
             "e de uma política de elegibilidade válida."
         )
         self._prompt_version = prompt_version
@@ -278,7 +278,7 @@ class DeterministicFaq:
         if "cash and carry" in normalized or "cash-and-carry" in normalized:
             return "Cash-and-carry combina posições opostas no mercado à vista e em derivativos para observar um spread. Ainda há risco de contraparte, liquidação, funding, base, custódia e execução; a AuraFi apenas explica o conceito e não monta nem executa a estratégia."
         if action in {"recommend", "discover"} or any(term in normalized for term in ("recomend", "aloca", "investir", "qual oportunidade")):
-            return "Para sugerir uma oportunidade, é necessário um perfil de risco declarado e uma política de elegibilidade válida."
+            return "Para sugerir uma oportunidade, é necessário o perfil do seu questionário e uma política de elegibilidade válida."
         return "Posso ajudar a entender oportunidades, riscos e simulações educativas. Não executo alocações."
 
 

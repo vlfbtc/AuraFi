@@ -94,7 +94,7 @@ struct DashboardView: View {
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(AuraTheme.purple)
             HStack(spacing: 8) {
-                Text("Perfil \((appModel.declaredProfile?.title ?? "não declarado").lowercased())")
+                Text("Perfil \((appModel.declaredProfile?.title ?? "não definido").lowercased())")
                 Text("•")
                 Text("Não custodial")
             }
@@ -1402,7 +1402,7 @@ struct SettingsView: View {
                     }
                 }
                 Section("Perfil de risco") {
-                    LabeledContent("Perfil", value: appModel.declaredProfile?.title ?? "Não declarado")
+                    LabeledContent("Perfil", value: appModel.declaredProfile?.title ?? "Não definido")
                     Button("Refazer questionário") {
                         dismiss()
                         appModel.flow = .riskQuiz

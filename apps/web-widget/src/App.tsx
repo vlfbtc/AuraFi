@@ -125,15 +125,15 @@ const questions = RISK_QUESTIONS;
 const profileCopy: Record<ProfileLevel, { label: string; description: string }> = {
   conservative: {
     label: 'Conservador',
-    description: 'Você declarou preferência por cautela, clareza de limites e mais tempo para revisar.',
+    description: 'Suas respostas indicam preferência por cautela, clareza de limites e mais tempo para revisar.',
   },
   moderate: {
     label: 'Moderado',
-    description: 'Você declarou preferência por equilibrar cautela, contexto e possibilidades.',
+    description: 'Suas respostas indicam preferência por equilibrar cautela, contexto e possibilidades.',
   },
   aggressive: {
     label: 'Arrojado',
-    description: 'Você declarou abertura para estudar mais oscilações e possibilidades com contexto.',
+    description: 'Suas respostas indicam abertura para estudar mais oscilações e possibilidades com contexto.',
   },
 };
 
@@ -458,7 +458,7 @@ function getErrorMessage(kind: ErrorKind, context: ErrorContext): string {
         : context === 'quiz'
         ? 'Escolha uma opção para continuar.'
         : context === 'profile'
-          ? 'Escolha um perfil declarado para continuar.'
+          ? 'Responda às cinco perguntas para continuar.'
           : 'Informe um valor maior que zero e selecione ao menos um cenário.';
   }
   if (kind === 'invalid') {
@@ -1733,7 +1733,7 @@ export default function App() {
           </article>
           <article className="overview-card overview-profile-card">
             <div className="overview-card-head"><span className="card-kicker">Seu contexto</span><span className="profile-initial" aria-hidden="true">{profile?.label?.slice(0, 1) ?? 'A'}</span></div>
-            <strong>{profile?.label ?? 'Ainda não declarado'}</strong>
+            <strong>{profile?.label ?? 'Ainda sem perfil'}</strong>
             <p>{profile?.description ?? 'Responda ao questionário para organizar as explicações pelo seu perfil.'}</p>
             <div className="overview-foot"><span>Decisão apoiada por contexto</span><strong>sem recomendação automática</strong></div>
           </article>
@@ -1760,9 +1760,9 @@ export default function App() {
             <div className="synthetic-bar" aria-hidden="true"><span /></div>
           </article>
           <article className="summary-card profile-summary-card">
-            <span className="card-kicker">Seu contexto declarado</span>
-            <strong className="summary-value">{profile?.label ?? 'Ainda não declarado'}</strong>
-            <p>{profile?.description ?? 'Conclua o onboarding para organizar as explicações por um perfil que você declarou.'}</p>
+            <span className="card-kicker">Seu perfil do questionário</span>
+            <strong className="summary-value">{profile?.label ?? 'Ainda sem perfil'}</strong>
+            <p>{profile?.description ?? 'Conclua o questionário para organizar as explicações pelo perfil das suas respostas.'}</p>
             <span className="summary-footnote">Perfil das suas respostas · soma de pontos</span>
           </article>
         </div>
@@ -2200,7 +2200,7 @@ export default function App() {
         <section className="empty-state" aria-labelledby="empty-title">
           <div className="empty-icon" aria-hidden="true">○</div>
           <p className="eyebrow">Resultado indisponível</p>
-          <h1 id="empty-title" ref={headingRef} tabIndex={-1}>Ainda não há um perfil declarado.</h1>
+          <h1 id="empty-title" ref={headingRef} tabIndex={-1}>Ainda não há um perfil do questionário.</h1>
           <p className="lead compact">Responda às cinco perguntas para visualizar um resultado.</p>
           <button className="primary-button" type="button" onClick={() => setView('quiz')}>Voltar ao questionário</button>
         </section>
@@ -2216,7 +2216,7 @@ export default function App() {
           <p className="lead compact">Cada resposta vale de 0 a 2 pontos, e a soma define o perfil, com a mesma regra do app.</p>
         </div>
         <article className="profile-card">
-          <div className="profile-card-top"><span className="profile-label">Perfil declarado</span><span className="profile-status">{savedProfile ? 'Salvo' : 'Para revisar'}</span></div>
+          <div className="profile-card-top"><span className="profile-label">Perfil calculado pelas respostas</span><span className="profile-status">{savedProfile ? 'Salvo' : 'Para revisar'}</span></div>
           <div className="profile-name-row"><span className={`profile-symbol ${declaredProfile}`} aria-hidden="true">✦</span><h2>{profile.label}</h2></div>
           <p>{profile.description}</p>
         </article>
@@ -2242,7 +2242,7 @@ export default function App() {
           <button className="primary-button" type="button" onClick={openDashboard}>Explorar dashboard <span aria-hidden="true">→</span></button>
         </div>
         {errorKind && errorContext === 'profile' ? <InlineAlert message={getErrorMessage(errorKind, 'profile')} {...(errorKind === 'network' ? { onRetry: () => { void handleSaveProfile(); } } : {})} /> : null}
-        <p className="disclaimer"><strong>Importante:</strong> este resultado organiza apenas as respostas que você declarou. É uma referência educativa, não uma recomendação personalizada e não garante resultados.</p>
+        <p className="disclaimer"><strong>Importante:</strong> este resultado organiza apenas as respostas que você declarou. É uma referência educativa, não uma avaliação profissional de adequação nem uma recomendação personalizada, e não garante resultados.</p>
         <div className="result-actions"><button className="back-button" type="button" onClick={() => setView('quiz')}>← Revisar respostas</button><button className="text-button" type="button" onClick={() => { void handleLogout(); }}>Sair e começar novamente</button></div>
       </section>
     );
