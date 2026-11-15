@@ -5,8 +5,10 @@ so the SQLite/in-memory path stays dependency-free.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -33,6 +35,12 @@ _RISK_DIMENSIONS = {
     "data_quality",
 }
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+# Espera pelo banco ao iniciar (reinício por troca de plano ou manutenção) e ao
+# reabrir uma conexão que caiu; o reabrir é curto porque segura o lock da requisição.
+DEFAULT_CONNECT_RETRY_SECONDS = 90.0
+_RECONNECT_RETRY_SECONDS = 5.0
+_RETRY_FIRST_DELAY = 1.0
+_RETRY_MAX_DELAY = 8.0
 
 
 def _to_datetime(value: Any) -> datetime:
@@ -84,7 +92,13 @@ def _acquisition_values(week: Any, code_requests: Any, accounts_created: Any) ->
 
 
 class PostgresRepository:
-    """One connection guarded by a lock, matching SQLiteRepository (single-replica MVP, no pooling)."""
+    """One connection guarded by a lock, matching SQLiteRepository (single-replica MVP, no pooling).
+
+    The first connection is retried for ``connect_retry_seconds``: a database that is
+    restarting (plan change, maintenance) refuses connections for a while, and the API
+    should wait instead of failing the deploy. A connection that drops later is reopened
+    on the next use; only an explicit ``close()`` is final.
+    """
 
     def __init__(
         self,
@@ -92,20 +106,54 @@ class PostgresRepository:
         *,
         now: Any = None,
         connect_timeout: float = 10.0,
+        connect_retry_seconds: float = DEFAULT_CONNECT_RETRY_SECONDS,
+        connect: Any = None,
+        retryable_errors: tuple[type[BaseException], ...] = (),
+        sleep: Any = time.sleep,
+        monotonic: Any = time.monotonic,
     ) -> None:
-        import psycopg
-        from psycopg.rows import dict_row
+        if connect is None:
+            import psycopg
+            from psycopg.rows import dict_row
 
-        self._psycopg = psycopg
-        self._dict_row = dict_row
+            self._psycopg = psycopg
+            self._dict_row = dict_row
+            connect = psycopg.connect
+            retryable_errors = (psycopg.OperationalError,)
+        else:
+            # Testes injetam a conexão; o psycopg não precisa estar instalado.
+            self._psycopg = None
+            self._dict_row = None
+        self._connect = connect
+        self._retryable_errors = tuple(retryable_errors)
+        self._connect_timeout = connect_timeout
+        self._connect_retry_seconds = max(0.0, float(connect_retry_seconds))
+        self._sleep = sleep
+        self._monotonic = monotonic
         self.dsn = dsn
         self._lock = threading.RLock()
         self._now = now or (lambda: datetime.now(timezone.utc))
-        self._connection = psycopg.connect(dsn, autocommit=False, connect_timeout=connect_timeout)
+        self._closed = False
+        self._connection = self._open_connection(self._connect_retry_seconds)
+
+    def _open_connection(self, retry_seconds: float) -> Any:
+        """Connects, retrying refused or dropped connections until ``retry_seconds`` pass."""
+
+        deadline = self._monotonic() + retry_seconds
+        delay = _RETRY_FIRST_DELAY
+        while True:
+            try:
+                return self._connect(self.dsn, autocommit=False, connect_timeout=self._connect_timeout)
+            except self._retryable_errors:
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    raise
+                self._sleep(min(delay, remaining))
+                delay = min(delay * 2, _RETRY_MAX_DELAY)
 
     @property
     def is_closed(self) -> bool:
-        return self._connection is None or self._connection.closed
+        return self._closed or self._connection is None or self._connection.closed
 
     def initialize(self, migrations_dir: str | Path | None = None) -> None:
         """Applies migrations not yet in aurafi.schema_migrations; safe to call on every startup."""
@@ -130,6 +178,7 @@ class PostgresRepository:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._connection is not None and not self._connection.closed:
                 self._connection.close()
 
@@ -1121,7 +1170,10 @@ class PostgresRepository:
             try:
                 yield connection
             except Exception:
-                connection.rollback()
+                # Conexão que caiu no meio da transação não aceita rollback; o
+                # erro original sobe, e a próxima operação reabre a conexão.
+                if not connection.closed:
+                    connection.rollback()
                 raise
             else:
                 connection.commit()
@@ -1141,8 +1193,19 @@ class PostgresRepository:
                 return cursor.fetchall()
 
     def _require_connection(self) -> Any:
-        if self._connection is None or self._connection.closed:
+        if self._closed:
             raise RuntimeError("PostgresRepository ja foi fechado")
+        connection = self._connection
+        if connection is None or connection.closed or getattr(connection, "broken", False):
+            # A conexão caiu (reinício do banco, rede): reabre em vez de falhar
+            # todas as requisições até o próximo deploy.
+            if connection is not None and not connection.closed:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            self._connection = None
+            self._connection = self._open_connection(_RECONNECT_RETRY_SECONDS)
         return self._connection
 
     @staticmethod
@@ -1191,16 +1254,33 @@ class PostgresRepository:
                 cls._reject_secrets(nested)
 
 
+def _connect_retry_seconds(raw: str | None) -> float:
+    """Lê AURAFI_DB_CONNECT_RETRY_SECONDS; vazio ou inválido usa o padrão."""
+
+    if raw is None or not raw.strip():
+        return DEFAULT_CONNECT_RETRY_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_CONNECT_RETRY_SECONDS
+    return value if value >= 0 else DEFAULT_CONNECT_RETRY_SECONDS
+
+
 def create_repository(database_url: str | None) -> PostgresRepository | None:
     """Cria e migra o adapter PostgreSQL quando ``DATABASE_URL`` foi configurada.
 
-    Sem URL, retorna ``None``. Erros de conexao ou de migracao sao propagados;
-    nao ha fallback silencioso para outro armazenamento.
+    Sem URL, retorna ``None``. Se o banco recusar a conexao, tenta de novo por
+    ``AURAFI_DB_CONNECT_RETRY_SECONDS`` (padrao: 90 s). Depois disso, erros de
+    conexao ou de migracao sao propagados; nao ha fallback silencioso para outro
+    armazenamento.
     """
 
     if database_url is None or not str(database_url).strip():
         return None
-    repository = PostgresRepository(str(database_url).strip())
+    repository = PostgresRepository(
+        str(database_url).strip(),
+        connect_retry_seconds=_connect_retry_seconds(os.environ.get("AURAFI_DB_CONNECT_RETRY_SECONDS")),
+    )
     repository.initialize()
     return repository
 
