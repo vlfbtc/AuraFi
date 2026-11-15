@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiClientError, PRIVACY_POLICY_VERSION, createWidgetApi, widgetApi } from './api';
 import { clearAttribution, readAttribution } from './attribution';
+import { RISK_QUESTIONS, profileForAnswers } from './riskQuestionnaire';
 import type { Alert as ApiAlert, AlertType, ApiMeta, AuthSession, Consent, ConversationData, MessageEnvelope, Opportunity as ApiOpportunity } from './api';
 
 type View = 'welcome' | 'email' | 'otp' | 'quiz' | 'result' | 'dashboard' | 'opportunity' | 'simulation' | 'hub' | 'alerts' | 'privacy';
@@ -17,19 +18,6 @@ type DecisionStatus = 'accepted' | 'refused';
 type DecisionFilter = 'all' | DecisionStatus;
 type ConversationErrorKind = 'start' | 'restore' | 'send' | 'consent';
 type DeletionStep = 'idle' | 'confirm' | 'code';
-
-interface QuestionOption {
-  value: string;
-  label: string;
-}
-
-interface Question {
-  id: string;
-  title: string;
-  prompt: string;
-  helper: string;
-  options: readonly QuestionOption[];
-}
 
 interface OtpChallenge {
   challengeId: string;
@@ -131,63 +119,8 @@ const IS_FIXTURE_MODE = widgetApi.mode === 'fixture';
 // (services/market_data/presentation.py), não da fonte.
 const RISK_ESTIMATE_NOTE = 'Nível estimado pela AuraFi a partir de APY e TVL (e da auditoria, quando a fonte a informa). Não avalia contrato, paridade, liquidez nem governança, e não indica adequação ao seu perfil.';
 
-const questions: readonly Question[] = [
-  {
-    id: 'q1',
-    title: 'Seu ponto de partida',
-    prompt: 'Como você prefere receber uma explicação sobre uma oportunidade?',
-    helper: 'Escolha a opção que mais combina com você hoje.',
-    options: [
-      { value: 'simple', label: 'Em linguagem simples, com os pontos principais' },
-      { value: 'complete', label: 'Com detalhes, fontes e contexto para comparar' },
-      { value: 'guided', label: 'Com uma trilha passo a passo e exemplos' },
-    ],
-  },
-  {
-    id: 'q2',
-    title: 'Como você decide',
-    prompt: 'O que ajuda você a se sentir seguro para avançar em uma análise?',
-    helper: 'Não existe resposta certa ou errada.',
-    options: [
-      { value: 'time', label: 'Ter tempo para ler e pensar com calma' },
-      { value: 'comparison', label: 'Comparar alternativas e seus riscos' },
-      { value: 'support', label: 'Contar com orientações claras em cada etapa' },
-    ],
-  },
-  {
-    id: 'q3',
-    title: 'Seu ritmo',
-    prompt: 'Qual ritmo de descoberta você prefere?',
-    helper: 'A AuraFi pode adaptar a profundidade das explicações depois.',
-    options: [
-      { value: 'slow', label: 'Ir com calma, uma novidade por vez' },
-      { value: 'balanced', label: 'Equilibrar novidades e tempo para revisar' },
-      { value: 'fast', label: 'Conhecer mais possibilidades de uma vez' },
-    ],
-  },
-  {
-    id: 'q4',
-    title: 'Sua prioridade',
-    prompt: 'Ao conhecer uma alternativa, o que você quer ver primeiro?',
-    helper: 'Sua resposta ajuda a organizar a próxima experiência.',
-    options: [
-      { value: 'risks', label: 'Riscos, limites e o que pode dar errado' },
-      { value: 'context', label: 'Contexto, critérios e como comparar' },
-      { value: 'possibilities', label: 'Possibilidades e cenários para estudar' },
-    ],
-  },
-  {
-    id: 'q5',
-    title: 'Sua declaração',
-    prompt: 'Qual perfil você deseja declarar para organizar suas próximas explicações?',
-    helper: 'Esta é uma escolha sua. A AuraFi não calcula ou infere o perfil a partir de dados externos.',
-    options: [
-      { value: 'conservative', label: 'Conservador — priorizo cautela e previsibilidade' },
-      { value: 'moderate', label: 'Moderado — busco equilíbrio entre cautela e possibilidades' },
-      { value: 'aggressive', label: 'Arrojado — aceito estudar mais oscilações e possibilidades' },
-    ],
-  },
-];
+// Mesmas perguntas e mesma pontuação do app iOS (riskQuestionnaire.ts).
+const questions = RISK_QUESTIONS;
 
 const profileCopy: Record<ProfileLevel, { label: string; description: string }> = {
   conservative: {
@@ -1246,7 +1179,14 @@ export default function App() {
     }
 
     if (currentQuestionIndex === questions.length - 1) {
-      setDeclaredProfile(selectedAnswer as ProfileLevel);
+      // A soma dos pontos define o perfil, com a mesma regra do app.
+      const profile = profileForAnswers(answers);
+      if (!profile) {
+        setErrorContext('quiz');
+        setErrorKind('empty');
+        return;
+      }
+      setDeclaredProfile(profile);
       setView('result');
       return;
     }
@@ -1648,14 +1588,14 @@ export default function App() {
         <ProgressBar current={currentQuestionIndex + 1} />
         <div className="quiz-heading">
           <p className="eyebrow">Pergunta {currentQuestionIndex + 1}</p>
-          <h1 id="quiz-title" ref={headingRef} tabIndex={-1}>{currentQuestion.prompt}</h1>
-          <p className="helper-copy">{currentQuestion.helper}</p>
+          <h1 id="quiz-title" ref={headingRef} tabIndex={-1}>{currentQuestion.title}</h1>
+          <p className="helper-copy">{currentQuestion.context}</p>
         </div>
         <div className="option-list" role="group" aria-labelledby="quiz-title" aria-describedby={errorKind && errorContext === 'quiz' ? 'quiz-error' : undefined}>
           {currentQuestion.options.map((option) => (
-            <button key={option.value} className={`option-button${selectedAnswer === option.value ? ' selected' : ''}`} type="button" aria-pressed={selectedAnswer === option.value} onClick={() => handleAnswer(option.value)}>
-              <span className="option-radio" aria-hidden="true">{selectedAnswer === option.value ? '✓' : ''}</span>
-              <span>{option.label}</span>
+            <button key={option.id} className={`option-button${selectedAnswer === option.id ? ' selected' : ''}`} type="button" aria-pressed={selectedAnswer === option.id} onClick={() => handleAnswer(option.id)}>
+              <span className="option-radio" aria-hidden="true">{selectedAnswer === option.id ? '✓' : ''}</span>
+              <span className="option-copy"><span>{option.title}</span><small>{option.subtitle}</small></span>
             </button>
           ))}
         </div>
@@ -1794,7 +1734,7 @@ export default function App() {
           <article className="overview-card overview-profile-card">
             <div className="overview-card-head"><span className="card-kicker">Seu contexto</span><span className="profile-initial" aria-hidden="true">{profile?.label?.slice(0, 1) ?? 'A'}</span></div>
             <strong>{profile?.label ?? 'Ainda não declarado'}</strong>
-            <p>{profile?.description ?? 'Declare um perfil para organizar as explicações, sem score automático.'}</p>
+            <p>{profile?.description ?? 'Responda ao questionário para organizar as explicações pelo seu perfil.'}</p>
             <div className="overview-foot"><span>Decisão apoiada por contexto</span><strong>sem recomendação automática</strong></div>
           </article>
           <article className="overview-card overview-safety-card">
@@ -1823,7 +1763,7 @@ export default function App() {
             <span className="card-kicker">Seu contexto declarado</span>
             <strong className="summary-value">{profile?.label ?? 'Ainda não declarado'}</strong>
             <p>{profile?.description ?? 'Conclua o onboarding para organizar as explicações por um perfil que você declarou.'}</p>
-            <span className="summary-footnote">Perfil declarado · sem score automático</span>
+            <span className="summary-footnote">Perfil das suas respostas · soma de pontos</span>
           </article>
         </div>
 
@@ -2273,7 +2213,7 @@ export default function App() {
         <div className="result-intro">
           <p className="eyebrow">Seu resultado</p>
           <h1 id="result-title" ref={headingRef} tabIndex={-1}>Um perfil para orientar sua jornada.</h1>
-          <p className="lead compact">Este é o perfil que você declarou a partir das suas respostas.</p>
+          <p className="lead compact">Cada resposta vale de 0 a 2 pontos, e a soma define o perfil, com a mesma regra do app.</p>
         </div>
         <article className="profile-card">
           <div className="profile-card-top"><span className="profile-label">Perfil declarado</span><span className="profile-status">{savedProfile ? 'Salvo' : 'Para revisar'}</span></div>
@@ -2285,8 +2225,8 @@ export default function App() {
             <h2 id="answers-title">O que você respondeu</h2>
             <ul className="answer-summary">
               {questions.map((question) => {
-                const answer = question.options.find((option) => option.value === answers[question.id]);
-                return <li key={question.id}><span>{question.title}</span><strong>{answer?.label ?? 'Não respondida'}</strong></li>;
+                const answer = question.options.find((option) => option.id === answers[question.id]);
+                return <li key={question.id}><span>{question.title}</span><strong>{answer?.title ?? 'Não respondida'}</strong></li>;
               })}
             </ul>
           </section>

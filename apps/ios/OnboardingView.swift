@@ -1,52 +1,13 @@
 import SwiftUI
 
-private struct RiskQuestion: Identifiable {
-    let id: String
-    let title: String
-    let context: String
-    let options: [RiskOption]
-}
-
-private struct RiskOption: Identifiable {
-    let id: String
-    let title: String
-    let subtitle: String
-    let score: Int
-}
-
 struct OnboardingView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var email = ""
     @State private var questionIndex = 0
     @State private var answers: [String: RiskOption] = [:]
 
-    private let questions = [
-        RiskQuestion(id: "question_1", title: "Se suas stablecoins caíssem 10% num mês ruim, como você reagiria?", context: "Sua reação ajuda a entender quanto desconforto você aceita.", options: [
-            RiskOption(id: "q1-a", title: "Sairia imediatamente", subtitle: "Não tolero perdas", score: 0),
-            RiskOption(id: "q1-b", title: "Esperaria e entenderia", subtitle: "Analiso antes de decidir", score: 1),
-            RiskOption(id: "q1-c", title: "Aproveitaria para alocar mais", subtitle: "Vejo como oportunidade", score: 2)
-        ]),
-        RiskQuestion(id: "question_2", title: "Por quanto tempo você pode manter esse valor alocado?", context: "Prazos maiores podem envolver mais variação.", options: [
-            RiskOption(id: "q2-a", title: "Até 3 meses", subtitle: "Posso precisar do valor logo", score: 0),
-            RiskOption(id: "q2-b", title: "De 3 a 12 meses", subtitle: "Tenho alguma flexibilidade", score: 1),
-            RiskOption(id: "q2-c", title: "Mais de 12 meses", subtitle: "Meu horizonte é longo", score: 2)
-        ]),
-        RiskQuestion(id: "question_3", title: "Quanto desse patrimônio você aceitaria expor a DeFi?", context: "Diversificação reduz a dependência de uma única oportunidade.", options: [
-            RiskOption(id: "q3-a", title: "Até 10%", subtitle: "Quero começar com cautela", score: 0),
-            RiskOption(id: "q3-b", title: "Entre 10% e 30%", subtitle: "Busco equilíbrio", score: 1),
-            RiskOption(id: "q3-c", title: "Mais de 30%", subtitle: "Aceito maior exposição", score: 2)
-        ]),
-        RiskQuestion(id: "question_4", title: "O que mais importa ao escolher uma oportunidade?", context: "Não existe resposta certa: queremos conhecer sua prioridade.", options: [
-            RiskOption(id: "q4-a", title: "Segurança e liquidez", subtitle: "Mesmo com rendimento menor", score: 0),
-            RiskOption(id: "q4-b", title: "Equilíbrio entre risco e retorno", subtitle: "Comparo os dois lados", score: 1),
-            RiskOption(id: "q4-c", title: "Maior potencial de retorno", subtitle: "Aceito mais incerteza", score: 2)
-        ]),
-        RiskQuestion(id: "question_5", title: "Como é sua experiência com protocolos DeFi?", context: "A linguagem e os detalhes serão adaptados ao seu momento.", options: [
-            RiskOption(id: "q5-a", title: "Estou começando", subtitle: "Preciso de explicações claras", score: 0),
-            RiskOption(id: "q5-b", title: "Já fiz algumas alocações", subtitle: "Conheço os conceitos principais", score: 1),
-            RiskOption(id: "q5-c", title: "Uso DeFi com frequência", subtitle: "Avalio protocolos e redes", score: 2)
-        ])
-    ]
+    // Mesmas perguntas e mesma pontuação do site (RiskQuestionnaire.swift).
+    private let questions = RiskQuestionnaire.questions
 
     var body: some View {
         ZStack {
@@ -365,9 +326,8 @@ struct OnboardingView: View {
     }
 
     private func submitQuiz() {
-        guard answers.count == questions.count else { return }
-        let score = answers.values.reduce(0) { $0 + $1.score }
-        let profile: RiskProfile = score <= 3 ? .conservative : (score <= 7 ? .moderate : .aggressive)
+        guard answers.count == questions.count,
+              let profile = RiskQuestionnaire.profile(forAnswers: answers.mapValues(\.id)) else { return }
         let apiAnswers = questions.compactMap { question in
             answers[question.id].map { APIAnswer(questionId: question.id, answer: $0.id) }
         }

@@ -930,3 +930,64 @@ private final class AppModelHarness {
         stub.tearDown()
     }
 }
+
+/// Questionário de perfil: o mesmo do site, conferido contra contracts/risk-questionnaire.json.
+final class RiskQuestionnaireTests: XCTestCase {
+    private func answers(scores: [Int]) -> [String: String] {
+        var result: [String: String] = [:]
+        for (question, score) in zip(RiskQuestionnaire.questions, scores) {
+            result[question.id] = question.options.first { $0.score == score }?.id
+        }
+        return result
+    }
+
+    func testSomaDosPontosDefineOPerfilComAsMesmasFronteirasDoSite() {
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [0, 0, 0, 0, 0])), .conservative)
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [1, 1, 1, 0, 0])), .conservative)
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [1, 1, 1, 1, 0])), .moderate)
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [2, 2, 2, 1, 0])), .moderate)
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [2, 2, 2, 2, 0])), .aggressive)
+        XCTAssertEqual(RiskQuestionnaire.profile(forAnswers: answers(scores: [2, 2, 2, 2, 2])), .aggressive)
+    }
+
+    func testRespostaFaltandoOuInvalidaNaoGeraPerfil() {
+        var partial = answers(scores: [0, 0, 0, 0, 0])
+        partial.removeValue(forKey: "question_5")
+        XCTAssertNil(RiskQuestionnaire.profile(forAnswers: partial))
+        var invalid = answers(scores: [0, 0, 0, 0, 0])
+        invalid["question_1"] = "q1-z"
+        XCTAssertNil(RiskQuestionnaire.profile(forAnswers: invalid))
+    }
+
+    func testPerguntasEPontuacaoIguaisAoArquivoCanonico() throws {
+        // O simulador lê o repositório a partir do caminho deste arquivo.
+        let canonical = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../contracts/risk-questionnaire.json")
+            .standardizedFileURL
+        let data = try Data(contentsOf: canonical)
+        let spec = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(spec["version"] as? String, RiskQuestionnaire.version)
+        let scoring = try XCTUnwrap(spec["scoring"] as? [String: Any])
+        XCTAssertEqual(scoring["conservative_max_score"] as? Int, RiskQuestionnaire.conservativeMaxScore)
+        XCTAssertEqual(scoring["moderate_max_score"] as? Int, RiskQuestionnaire.moderateMaxScore)
+
+        let questions = try XCTUnwrap(spec["questions"] as? [[String: Any]])
+        let decoded = questions.map { question in
+            RiskQuestion(
+                id: question["id"] as? String ?? "",
+                title: question["title"] as? String ?? "",
+                context: question["context"] as? String ?? "",
+                options: (question["options"] as? [[String: Any]] ?? []).map { option in
+                    RiskOption(
+                        id: option["id"] as? String ?? "",
+                        title: option["title"] as? String ?? "",
+                        subtitle: option["subtitle"] as? String ?? "",
+                        score: option["score"] as? Int ?? -1
+                    )
+                }
+            )
+        }
+        XCTAssertEqual(decoded, RiskQuestionnaire.questions)
+    }
+}

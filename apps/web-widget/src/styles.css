@@ -120,6 +120,8 @@ h2 { font-size: 25px; line-height: 1.08; }
 .option-button.selected { background: #edf8f1; border-color: #66a483; }
 .option-radio { align-items: center; border: 1px solid #9ab4a7; border-radius: 50%; color: var(--ink); display: inline-flex; flex: 0 0 auto; font-size: 13px; height: 23px; justify-content: center; width: 23px; }
 .selected .option-radio { background: var(--mint-strong); border-color: #52916f; }
+.option-copy { display: grid; gap: 2px; }
+.option-copy small { color: var(--muted); font-size: 13px; }
 .quiz-footer { align-items: center; display: flex; gap: 18px; justify-content: space-between; margin-top: 36px; }
 .answered-count { color: var(--muted); font-size: 12px; margin-right: auto; }
 

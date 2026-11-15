@@ -1,0 +1,61 @@
+{
+  "version": "aurafi-risk-2026-11",
+  "description": "Questionário de perfil de risco único para o site (apps/web-widget/src/riskQuestionnaire.ts) e o app iOS (apps/ios/RiskQuestionnaire.swift). Cada opção vale de 0 a 2 pontos; a soma das cinco respostas define o perfil. tests/unit/test_risk_questionnaire.py confere as duas versões contra este arquivo e dá as mesmas respostas às duas.",
+  "scoring": {
+    "method": "sum",
+    "conservative_max_score": 3,
+    "moderate_max_score": 7
+  },
+  "questions": [
+    {
+      "id": "question_1",
+      "title": "Se suas stablecoins caíssem 10% num mês ruim, como você reagiria?",
+      "context": "Sua reação ajuda a entender quanto desconforto você aceita.",
+      "options": [
+        { "id": "q1-a", "title": "Sairia imediatamente", "subtitle": "Não tolero perdas", "score": 0 },
+        { "id": "q1-b", "title": "Esperaria e entenderia", "subtitle": "Analiso antes de decidir", "score": 1 },
+        { "id": "q1-c", "title": "Aproveitaria para alocar mais", "subtitle": "Vejo como oportunidade", "score": 2 }
+      ]
+    },
+    {
+      "id": "question_2",
+      "title": "Por quanto tempo você pode manter esse valor alocado?",
+      "context": "Prazos maiores podem envolver mais variação.",
+      "options": [
+        { "id": "q2-a", "title": "Até 3 meses", "subtitle": "Posso precisar do valor logo", "score": 0 },
+        { "id": "q2-b", "title": "De 3 a 12 meses", "subtitle": "Tenho alguma flexibilidade", "score": 1 },
+        { "id": "q2-c", "title": "Mais de 12 meses", "subtitle": "Meu horizonte é longo", "score": 2 }
+      ]
+    },
+    {
+      "id": "question_3",
+      "title": "Quanto desse patrimônio você aceitaria expor a DeFi?",
+      "context": "Diversificação reduz a dependência de uma única oportunidade.",
+      "options": [
+        { "id": "q3-a", "title": "Até 10%", "subtitle": "Quero começar com cautela", "score": 0 },
+        { "id": "q3-b", "title": "Entre 10% e 30%", "subtitle": "Busco equilíbrio", "score": 1 },
+        { "id": "q3-c", "title": "Mais de 30%", "subtitle": "Aceito maior exposição", "score": 2 }
+      ]
+    },
+    {
+      "id": "question_4",
+      "title": "O que mais importa ao escolher uma oportunidade?",
+      "context": "Não existe resposta certa: queremos conhecer sua prioridade.",
+      "options": [
+        { "id": "q4-a", "title": "Segurança e liquidez", "subtitle": "Mesmo com rendimento menor", "score": 0 },
+        { "id": "q4-b", "title": "Equilíbrio entre risco e retorno", "subtitle": "Comparo os dois lados", "score": 1 },
+        { "id": "q4-c", "title": "Maior potencial de retorno", "subtitle": "Aceito mais incerteza", "score": 2 }
+      ]
+    },
+    {
+      "id": "question_5",
+      "title": "Como é sua experiência com protocolos DeFi?",
+      "context": "A linguagem e os detalhes serão adaptados ao seu momento.",
+      "options": [
+        { "id": "q5-a", "title": "Estou começando", "subtitle": "Preciso de explicações claras", "score": 0 },
+        { "id": "q5-b", "title": "Já fiz algumas alocações", "subtitle": "Conheço os conceitos principais", "score": 1 },
+        { "id": "q5-c", "title": "Uso DeFi com frequência", "subtitle": "Avalio protocolos e redes", "score": 2 }
+      ]
+    }
+  ]
+}
